@@ -1,4 +1,19 @@
 // CMSIS-DAP v2 (bulk) 传输层: 打开设备、收发命令包
+// 命令 ID 按 Include/DAP.h 现行编号 (注意: 0x08 是 WriteABORT, SWJ_Clock 是 0x11)
+export const DAP_CMD = {
+  info: 0x00,
+  hostStatus: 0x01,
+  connect: 0x02,
+  disconnect: 0x03,
+  writeAbort: 0x08,
+  delay: 0x09,
+  resetTarget: 0x0a,
+  swjPins: 0x10,
+  swjClock: 0x11,
+  swjSequence: 0x12,
+  jtagSequence: 0x14,
+} as const;
+
 export class DapError extends Error {}
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -97,7 +112,7 @@ export class CmsisDap {
     try {
       const out = await this.withTimeout(this.device.transferOut(this.iface.outEp, req), timeoutMs, 'USB 发送');
       if (out.status !== 'ok') throw new DapError(`USB 发送失败: ${out.status}`);
-      const inn = await this.withTimeout(this.device.transferIn(this.iface.inEp, this.iface.inSize), timeoutMs, 'USB 接收');
+      const inn = await this.withTimeout(this.device.transferIn(this.iface.inEp, this.pktSize), timeoutMs, 'USB 接收');
       if (inn.status !== 'ok' || !inn.data) throw new DapError(`USB 接收失败: ${inn.status}`);
       const r = new Uint8Array(inn.data.buffer, inn.data.byteOffset, inn.data.byteLength);
       if (r.length < 1) throw new DapError('DAP 空响应');
@@ -156,7 +171,7 @@ export class CmsisDap {
   // DAP_SWJ_Clock: 设置 TCK 频率 (Hz)
   async swjClock(hz: number): Promise<void> {
     const r = await this.cmd(
-      Uint8Array.of(0x08, hz & 0xff, (hz >>> 8) & 0xff, (hz >>> 16) & 0xff, (hz >>> 24) & 0xff),
+      Uint8Array.of(DAP_CMD.swjClock, hz & 0xff, (hz >>> 8) & 0xff, (hz >>> 16) & 0xff, (hz >>> 24) & 0xff),
     );
     CmsisDap.expectOk(r, '设置时钟');
   }

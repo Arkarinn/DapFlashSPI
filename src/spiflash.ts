@@ -1,7 +1,7 @@
 // SPI-over-JTAG: 用 DAP_JTAG_Sequence 模拟 SPI (mode 0)
 // 引脚映射: TCK=SCK, TMS=CS, TDI=MOSI, TDO=MISO
 // JTAG 数据 LSB-first, SPI FLASH 命令 MSB-first → 每字节做位反转
-import { CmsisDap, DapError, sleep } from './dap.js';
+import { CmsisDap, DAP_CMD, DapError, sleep } from './dap.js';
 
 const REV8 = new Uint8Array(256);
 for (let i = 0; i < 256; i++) {
@@ -32,7 +32,8 @@ export class SpiFlash {
   readonly dataChunk: number;
 
   constructor(readonly dap: CmsisDap) {
-    const n = Math.floor((dap.pktSize - 4) / 9);
+    // 序列个数是单字节 (≤255, 含结尾拉高段), 据此约束每次事务的数据量
+    const n = Math.min(254, Math.floor((dap.pktSize - 4) / 9));
     this.dataChunk = Math.max(4, n * 8 - 4);
   }
 
@@ -51,12 +52,12 @@ export class SpiFlash {
     seqs.push({ data: new Uint8Array([0]), tms: 1, capture: false }); // 结尾段: TMS=1 拉高 CS (1 个 TCK)
     const expect = out.length - cut;
 
-    // 组包: [0x10][序列个数]([info][tdi...])*  (官方固件 DAP_JTAG_Sequence 格式)
+    // 组包: [0x14][序列个数]([info][tdi...])*  (官方固件 DAP_JTAG_Sequence 格式)
     let len = 2;
     for (const s of seqs) len += 1 + s.data.length;
     const pkt = new Uint8Array(len);
     let p = 0;
-    pkt[p++] = 0x10;
+    pkt[p++] = DAP_CMD.jtagSequence;
     pkt[p++] = seqs.length;
     for (const s of seqs) {
       pkt[p++] = (s.tms ? 0x40 : 0) | (s.capture ? 0x80 : 0) | ((s.data.length * 8) & 0x3f);
