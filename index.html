@@ -27,7 +27,25 @@
   button:hover:not(:disabled) { background: #e3e5e1; }
   button:active:not(:disabled) { background: #d6d8d3; }
   button:disabled { opacity: .35; cursor: default; }
-  select { font: inherit; padding: 3px 4px; border: 1px solid #6b6b67; background: #fff; border-radius: 2px; }
+
+  /* 自绘下拉框 */
+  .dd { position: relative; display: inline-block; }
+  .dd-btn {
+    display: flex; align-items: center; gap: 6px; min-height: 24px;
+    padding: 2px 6px; text-align: left; border-radius: 2px;
+  }
+  .dd-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .dd-caret { color: #77776f; font-size: 10px; }
+  .dd-menu {
+    display: none; position: absolute; top: calc(100% + 2px); left: 0; z-index: 30;
+    min-width: 100%; width: max-content; max-width: 520px; max-height: 240px; overflow-y: auto;
+    background: #fff; border: 1px solid #6b6b67; box-shadow: 2px 2px 0 rgba(0,0,0,.14);
+  }
+  .dd.open .dd-menu { display: block; }
+  .dd-item { padding: 4px 10px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  .dd-item:hover { background: #eff1ed; }
+  .dd-item.sel { background: #e2e7e0; font-weight: 600; }
+  .dd.disabled .dd-btn { opacity: .35; cursor: default; }
 
   /* 设备管理 */
   #device-list {
@@ -58,8 +76,10 @@
 
   /* FLASH 操作 */
   .fieldrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .fieldrow label { color: #44443f; }
-  #flash-sel { flex: 1; min-width: 260px; max-width: 480px; }
+  .fieldrow .fld { color: #44443f; }
+  #clk-dd .dd-btn { width: 86px; }
+  #flash-dd { flex: 1; min-width: 220px; max-width: 470px; }
+  #flash-dd .dd { width: 100%; }
 
   .bufrow { display: flex; gap: 10px; margin-top: 10px; }
   .bufleft { flex: 1; min-width: 0; }
@@ -68,9 +88,9 @@
   table.hex { border-collapse: collapse; font: 12.5px/1.5 Consolas, monospace; }
   .hex th {
     position: sticky; top: 0; z-index: 1; background: #e4e5e0; color: #44443f;
-    border: 1px solid #b9b9b3; padding: 1px 8px; font-weight: 600;
+    border: 1px solid #b9b9b3; padding: 1px 6px; font-weight: 600;
   }
-  .hex td { border: 1px solid #e4e5e0; padding: 0 8px; }
+  .hex td { border: 1px solid #e4e5e0; padding: 0 6px; }
   .hex td:first-child { background: #efefe9; color: #77776f; }
   .opcol { display: flex; flex-direction: column; gap: 6px; width: 96px; }
   .opcol button { width: 100%; }
@@ -104,8 +124,8 @@
 <section>
   <h2>FLASH 操作</h2>
   <div class="fieldrow">
-    <label>时钟速度 <select id="clk-sel"></select></label>
-    <label>FLASH 型号 <select id="flash-sel"></select></label>
+    <span class="fld">时钟速度</span><span id="clk-dd"></span>
+    <span class="fld">FLASH 型号</span><span id="flash-dd"></span>
     <button id="btn-automatch" disabled>自动匹配</button>
   </div>
   <div class="bufrow">

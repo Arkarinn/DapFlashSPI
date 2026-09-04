@@ -1,6 +1,7 @@
 // CMSIS-DAP Flash Tool — 界面原型
 // 按 TODO.md 设计; 仅实现界面与互锁, 操作函数为占位 (标注 [未实现]/[演示])
 import { FLASH_DB } from './flashdb.js';
+import { Dropdown } from './dropdown.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -11,8 +12,8 @@ const $ = <T extends HTMLElement>(id: string): T => {
 const deviceListEl = $('device-list');
 const statusDot = $('status-dot');
 const statusText = $('status-text');
-const clkSel = $<HTMLSelectElement>('clk-sel');
-const flashSel = $<HTMLSelectElement>('flash-sel');
+const clkDd = new Dropdown($('clk-dd'));
+const flashDd = new Dropdown($('flash-dd'));
 const hexView = $('hex-view');
 const bufInfo = $('buf-info');
 const logEl = $<HTMLElement>('log');
@@ -223,32 +224,26 @@ navigator.usb.onconnect = (e: USBConnectionEvent) => {
 
 // ---------- 初始化 ----------
 
-for (const [label, kHz] of [
-  ['100 kHz', '100'],
-  ['500 kHz', '500'],
-  ['1 MHz', '1000'],
-  ['2 MHz', '2000'],
-  ['5 MHz', '5000'],
-  ['10 MHz', '10000'],
-  ['20 MHz', '20000'],
-] as const) {
-  const o = document.createElement('option');
-  o.value = kHz;
-  o.textContent = label;
-  if (kHz === '10000') o.selected = true;
-  clkSel.appendChild(o);
-}
+clkDd.setOptions(
+  [
+    { value: '100', label: '100 kHz' },
+    { value: '500', label: '500 kHz' },
+    { value: '1000', label: '1 MHz' },
+    { value: '2000', label: '2 MHz' },
+    { value: '5000', label: '5 MHz' },
+    { value: '10000', label: '10 MHz' },
+    { value: '20000', label: '20 MHz' },
+  ],
+  '10000',
+);
 
-{
-  const o = document.createElement('option');
-  o.textContent = '（请选择 FLASH 型号）';
-  flashSel.appendChild(o);
-}
-for (const f of FLASH_DB) {
-  const o = document.createElement('option');
-  o.textContent = `${f.vendor} ${f.model} · ${fmtSize(f.sizeBytes)} · JEDEC ${f.jedecId.toString(16).padStart(6, '0').toUpperCase()}`;
-  flashSel.appendChild(o);
-}
+flashDd.setOptions([
+  { value: '', label: '（请选择 FLASH 型号）' },
+  ...FLASH_DB.map((f, i) => ({
+    value: String(i),
+    label: `${f.vendor} ${f.model} · ${fmtSize(f.sizeBytes)} · JEDEC ${f.jedecId.toString(16).padStart(6, '0').toUpperCase()}`,
+  })),
+]);
 
 log('CMSIS-DAP Flash Tool 就绪 (界面原型, 操作函数为占位).');
 renderHex(BUFFER);
