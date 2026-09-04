@@ -103,15 +103,17 @@ function clkLabel(): string {
 function updateUi(): void {
   const opened = dap !== null;
   const hasSel = devices.length > 0 && selectedIdx >= 0;
-  btn.pair.disabled = opened || busy;
-  btn.refresh.disabled = opened || busy;
-  btn.open.disabled = opened || busy || !hasSel;
-  btn.close.disabled = !opened || busy;
-  btn.automatch.disabled = !opened || busy;
-  for (const b of [btn.read, btn.erase, btn.blank]) b.disabled = !opened || busy || !flashInfo;
-  for (const b of [btn.write, btn.verify]) b.disabled = !opened || busy || !flashInfo || !buffer;
-  btn.fileOpen.disabled = busy;
-  btn.save.disabled = busy || !buffer;
+  // 忙态硬禁用; 其余状态只做视觉变暗 (dim), 点击时由处理器给出具体日志提示
+  const lockables = [btn.pair, btn.refresh, btn.open, btn.close, btn.automatch, btn.read, btn.erase, btn.blank, btn.write, btn.verify, btn.fileOpen, btn.save];
+  for (const b of lockables) b.disabled = busy;
+  const dim = (b: HTMLButtonElement, on: boolean) => b.classList.toggle('dim', on);
+  dim(btn.pair, opened);
+  dim(btn.open, opened || !hasSel);
+  dim(btn.close, !opened);
+  dim(btn.automatch, !opened);
+  for (const b of [btn.read, btn.erase, btn.blank]) dim(b, !opened || !flashInfo);
+  for (const b of [btn.write, btn.verify]) dim(b, !opened || !flashInfo || !buffer);
+  dim(btn.save, !buffer);
   statusDot.className = 'dot ' + (opened ? (busy ? 'warn' : 'ok') : 'err');
   statusText.textContent = opened
     ? `已打开: ${devLabel(dap!.device)} · 包 ${dap!.pktSize}B${flashInfo ? ` · ${flashInfo.model}` : ''}${busy ? ' · 操作中…' : ''}`
@@ -469,6 +471,8 @@ if (!('usb' in navigator)) {
 }
 
 btn.pair.onclick = async () => {
+  if (busy) return;
+  if (dap) return log('! 设备已打开, 请先关闭');
   try {
     const d = await navigator.usb.requestDevice({ filters: [] });
     log(`已配对: ${devLabel(d)}`);
@@ -483,24 +487,71 @@ btn.pair.onclick = async () => {
     }
   } catch (e) {
     if ((e as DOMException)?.name === 'NotFoundError') {
-      log('! 未选择设备 (若未弹出选择框: 内嵌/Edge 以外浏览器可能不支持 USB 授权, 请改用 Chrome 或 Edge)');
+      log('! 未选择设备 (若未弹出选择框: 内嵌浏览器不支持 USB 授权, 请改用 Chrome 或 Edge)');
       return;
     }
     log(`! 配对失败: ${err(e)}`);
   }
 };
 
-btn.refresh.onclick = () => refreshDevices();
-btn.open.onclick = () => runOp('打开设备', opOpen);
-btn.close.onclick = () => runOp('关闭设备', opClose);
-btn.automatch.onclick = () => runOp('自动匹配', opAutomatch);
-btn.read.onclick = () => runOp('读取', opRead);
-btn.erase.onclick = () => runOp('擦除', opErase);
-btn.blank.onclick = () => runOp('查空', opBlank);
-btn.write.onclick = () => runOp('写入', opWrite);
-btn.verify.onclick = () => runOp('校验', opVerify);
-btn.fileOpen.onclick = () => fileInput.click();
-btn.save.onclick = saveBuffer;
+btn.refresh.onclick = () => {
+  if (!busy) void refreshDevices();
+};
+btn.open.onclick = () => {
+  if (busy) return;
+  if (dap) return log('! 设备已处于打开状态');
+  if (!devices[selectedIdx]) return log('! 未选择设备: 请先点击"配对"授权并选中列表中的设备 (授权弹窗需 Chrome / Edge)');
+  runOp('打开设备', opOpen);
+};
+btn.close.onclick = () => {
+  if (busy || !dap) {
+    if (!busy && !dap) log('! 设备未打开');
+    return;
+  }
+  runOp('关闭设备', opClose);
+};
+btn.automatch.onclick = () => {
+  if (busy) return;
+  if (!dap) return log('! 请先打开设备');
+  runOp('自动匹配', opAutomatch);
+};
+// 返回 true 表示不满足条件 (busy 时静默, 其余情况已输出日志说明原因)
+const devGuard = (): boolean => {
+  if (busy) return true;
+  if (!dap) {
+    log('! 请先打开设备');
+    return true;
+  }
+  return false;
+};
+const modelGuard = (): boolean => {
+  if (!flashInfo) {
+    log('! 请先选择 FLASH 型号 (或使用自动匹配)');
+    return true;
+  }
+  return false;
+};
+btn.read.onclick = () => { if (devGuard() || modelGuard()) return; runOp('读取', opRead); };
+btn.erase.onclick = () => { if (devGuard() || modelGuard()) return; runOp('擦除', opErase); };
+btn.blank.onclick = () => { if (devGuard() || modelGuard()) return; runOp('查空', opBlank); };
+btn.write.onclick = () => {
+  if (devGuard() || modelGuard()) return;
+  if (!buffer) return log('! 缓冲区为空: 请先读取 FLASH 或打开文件');
+  runOp('写入', opWrite);
+};
+btn.verify.onclick = () => {
+  if (devGuard() || modelGuard()) return;
+  if (!buffer) return log('! 缓冲区为空: 请先读取 FLASH 或打开文件');
+  runOp('校验', opVerify);
+};
+btn.fileOpen.onclick = () => {
+  if (!busy) fileInput.click();
+};
+btn.save.onclick = () => {
+  if (busy) return;
+  if (!buffer) return log('! 缓冲区为空: 请先读取 FLASH 或打开文件');
+  saveBuffer();
+};
 btn.clearLog.onclick = () => {
   logEl.textContent = '';
 };
