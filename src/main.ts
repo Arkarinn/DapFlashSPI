@@ -1,7 +1,10 @@
-// CMSIS-DAP Flash Tool — 界面原型
-// 按 TODO.md 设计; 仅实现界面与互锁, 操作函数为占位 (标注 [未实现]/[演示])
-import { FLASH_DB } from './flashdb.js';
+// CMSIS-DAP Flash Tool
+// 设备管理 (WebUSB) + FLASH 操作 (JTAG 模拟 SPI): 读取/擦除/查空/写入/校验/自动匹配
+import { FLASH_DB, FlashInfo } from './flashdb.js';
 import { Dropdown } from './dropdown.js';
+import { CmsisDap, DapError, sleep } from './dap.js';
+import { SpiFlash } from './spiflash.js';
+import { HexView } from './hexview.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -14,9 +17,10 @@ const statusDot = $('status-dot');
 const statusText = $('status-text');
 const clkDd = new Dropdown($('clk-dd'));
 const flashDd = new Dropdown($('flash-dd'));
-const hexView = $('hex-view');
 const bufInfo = $('buf-info');
 const logEl = $<HTMLElement>('log');
+const fileInput = $<HTMLInputElement>('file-input');
+const hex = new HexView($('hex-view'));
 
 const btn = {
   pair: $<HTMLButtonElement>('btn-pair'),
@@ -34,26 +38,27 @@ const btn = {
   clearLog: $<HTMLButtonElement>('btn-clear-log'),
 };
 
-// 需要设备处于打开状态的按钮 (互锁)
-const NEEDS_OPEN: HTMLButtonElement[] = [
-  btn.automatch, btn.read, btn.erase, btn.blank, btn.write, btn.verify,
-];
+const PAGE_SIZE = 256;
+const CHIP_ERASE_TIMEOUT_MS = 300_000; // 大容量芯片全片擦除最长可达数分钟
+const PAGE_PROG_TIMEOUT_MS = 200;
 
 let devices: USBDevice[] = [];
 let selectedIdx = -1;
-let openState = false; // 界面演示状态; 实际打开/claim/连接待实现
-
-// 演示数据: 1KB 全 0xFF (空 FLASH 常态), 后续由 读取/打开文件 填充
-const BUFFER = new Uint8Array(1024).fill(0xff);
+let dap: CmsisDap | null = null;
+let spi: SpiFlash | null = null;
+let flashInfo: FlashInfo | null = null;
+let buffer: Uint8Array<ArrayBuffer> | null = null;
+let busy = false;
+let abort = false;
+const capsMap = new Map<USBDevice, { swd: boolean; jtag: boolean }>();
 
 // ---------- 工具函数 ----------
 
 const err = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const hex16 = (n: number): string => n.toString(16).padStart(4, '0').toUpperCase();
-const hex8 = (n: number): string => n.toString(16).padStart(2, '0').toUpperCase();
 
 function fmtSize(n: number): string {
-  return n >= 1048576 ? `${n / 1048576} MB` : `${n / 1024} KB`;
+  return n >= 1048576 ? `${(n / 1048576).toFixed(n % 1048576 === 0 ? 0 : 1)} MB` : `${(n / 1024).toFixed(0)} KB`;
 }
 
 function devLabel(d: USBDevice): string {
@@ -66,6 +71,67 @@ function log(msg: string): void {
   const ts = `${p(t.getHours(), 2)}:${p(t.getMinutes(), 2)}:${p(t.getSeconds(), 2)}.${p(t.getMilliseconds(), 3)}`;
   logEl.textContent = `${logEl.textContent ?? ''}${ts}  ${msg}\n`.slice(-65536);
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+function checkAbort(): void {
+  if (abort) throw new Error('已取消');
+}
+
+function makeProgress(total: number, what: string): (done: number) => void {
+  const t0 = performance.now();
+  let lastPct = -100;
+  return (done: number) => {
+    const pct = total > 0 ? Math.floor((done / total) * 100) : 100;
+    if (pct >= lastPct + 5 || done >= total) {
+      lastPct = pct;
+      const dt = (performance.now() - t0) / 1000;
+      log(
+        dt > 0.3
+          ? `${what}: ${fmtSize(done)} / ${fmtSize(total)} (${pct}%, ${dt.toFixed(1)}s, ${(done / 1024 / dt).toFixed(0)} KB/s)`
+          : `${what}: ${fmtSize(done)} / ${fmtSize(total)} (${pct}%)`,
+      );
+    }
+  };
+}
+
+// ---------- 界面状态 ----------
+
+function clkLabel(): string {
+  return clkDd.option?.label ?? '';
+}
+
+function updateUi(): void {
+  const opened = dap !== null;
+  const hasSel = devices.length > 0 && selectedIdx >= 0;
+  btn.pair.disabled = opened || busy;
+  btn.refresh.disabled = opened || busy;
+  btn.open.disabled = opened || busy || !hasSel;
+  btn.close.disabled = !opened || busy;
+  btn.automatch.disabled = !opened || busy;
+  for (const b of [btn.read, btn.erase, btn.blank]) b.disabled = !opened || busy || !flashInfo;
+  for (const b of [btn.write, btn.verify]) b.disabled = !opened || busy || !flashInfo || !buffer;
+  btn.fileOpen.disabled = busy;
+  btn.save.disabled = busy || !buffer;
+  statusDot.className = 'dot ' + (opened ? (busy ? 'warn' : 'ok') : 'err');
+  statusText.textContent = opened
+    ? `已打开: ${devLabel(dap!.device)} · 包 ${dap!.pktSize}B${flashInfo ? ` · ${flashInfo.model}` : ''}${busy ? ' · 操作中…' : ''}`
+    : busy
+      ? '操作进行中…'
+      : '未打开设备';
+}
+
+function updateBufInfo(): void {
+  bufInfo.textContent = buffer
+    ? `缓冲区 0x00000000 – 0x${(buffer.length - 1).toString(16).padStart(8, '0').toUpperCase()} (${fmtSize(buffer.length)})`
+    : '缓冲区为空';
+}
+
+function allocBuffer(size: number, reason: string): void {
+  if (buffer && buffer.length === size) return;
+  buffer = new Uint8Array(size).fill(0xff);
+  hex.setData(buffer);
+  updateBufInfo();
+  log(`${reason}: 缓冲区 ${fmtSize(size)} (0xFF)`);
 }
 
 // ---------- 设备管理 ----------
@@ -91,15 +157,18 @@ function renderDevices(): void {
     id.className = 'dev-id';
     id.textContent = `${hex16(d.vendorId)}:${hex16(d.productId)}`;
 
-    // 是否支持 JTAG/SWD: 打开后经 DAP_Info 查询 (待实现)
-    for (const cap of ['JTAG ?', 'SWD ?']) {
+    row.append(id, name);
+    const caps = capsMap.get(d);
+    for (const [nm, ok] of [
+      ['JTAG', caps?.jtag],
+      ['SWD', caps?.swd],
+    ] as const) {
       const c = document.createElement('span');
-      c.className = 'cap';
-      c.title = '打开后通过 DAP_Info 查询';
-      c.textContent = cap;
+      c.className = 'cap' + (ok === false ? ' no' : '');
+      c.title = ok === undefined ? '打开设备后通过 DAP_Info 查询' : '';
+      c.textContent = `${nm} ${ok === undefined ? '?' : ok ? '✓' : '✗'}`;
       row.appendChild(c);
     }
-    row.prepend(id, name);
     row.onclick = () => {
       selectedIdx = i;
       renderDevices();
@@ -116,70 +185,273 @@ async function refreshDevices(): Promise<void> {
   updateUi();
 }
 
-// ---------- FLASH 操作 ----------
-
-function renderHex(buf: Uint8Array): void {
-  const table = document.createElement('table');
-  table.className = 'hex';
-  const head = table.createTHead().insertRow();
-  for (const label of ['地址', ...Array.from({ length: 16 }, (_, i) => i.toString(16).toUpperCase())]) {
-    const th = document.createElement('th');
-    th.textContent = label;
-    head.appendChild(th);
+async function opOpen(): Promise<void> {
+  const dev = devices[selectedIdx];
+  if (!dev || dap || busy) return;
+  busy = true;
+  updateUi();
+  try {
+    log(`正在打开 ${devLabel(dev)} …`);
+    dap = await CmsisDap.open(dev);
+    const caps = await dap.getCaps();
+    if (caps) capsMap.set(dev, caps);
+    renderDevices();
+    if (caps && !caps.jtag) throw new DapError('该设备不支持 JTAG (SPI 需要 JTAG 模式)');
+    await dap.hostStatus(true);
+    await dap.swjClock(Number(clkDd.option?.value ?? 10000) * 1000);
+    await dap.connectJtag();
+    spi = new SpiFlash(dap);
+    log(`已就绪: 包长 ${dap.pktSize}B, 单次事务 ${spi.dataChunk}B, JTAG 已连接, ${clkLabel()}`);
+  } catch (e) {
+    if (dap) {
+      try {
+        await dap.device.close();
+      } catch {
+        /* 忽略 */
+      }
+    }
+    dap = null;
+    spi = null;
+    log(`! 打开失败: ${err(e)}${err(e).includes('claim') ? ' (Windows 下缺少 WinUSB 驱动时常见, 见 README)' : ''}`);
   }
-  const body = table.createTBody();
-  for (let off = 0; off < buf.length; off += 16) {
-    const row = body.insertRow();
-    row.insertCell().textContent = off.toString(16).padStart(8, '0').toUpperCase();
-    for (let i = 0; i < 16; i++) row.insertCell().textContent = hex8(buf[off + i]!);
-  }
-  hexView.innerHTML = '';
-  hexView.appendChild(table);
-  bufInfo.textContent =
-    `缓冲区 0x00000000 – 0x${(buf.length - 1).toString(16).padStart(8, '0').toUpperCase()}` +
-    ` (${fmtSize(buf.length)}, 演示数据)`;
+  busy = false;
+  updateUi();
 }
 
-// ---------- 操作函数 (占位, 待实现) ----------
-
-btn.open.onclick = () => {
-  const d = devices[selectedIdx];
-  if (!d || openState) return;
-  openState = true;
-  log(`[演示] 打开 ${devLabel(d)}: claim 接口/定位端点/DAP 连接待实现`);
+async function opClose(): Promise<void> {
+  if (!dap || busy) return;
+  busy = true;
   updateUi();
-};
-
-btn.close.onclick = () => {
-  if (!openState) return;
-  const d = devices[selectedIdx];
-  openState = false;
-  log(`[演示] 关闭 ${d ? devLabel(d) : ''}`);
+  const dev = dap.device;
+  try {
+    await dap.disconnect();
+    await dap.hostStatus(false);
+    await dev.close();
+    log('设备已关闭');
+  } catch (e) {
+    log(`! 关闭出错: ${err(e)}`);
+  }
+  dap = null;
+  spi = null;
+  busy = false;
   updateUi();
-};
+}
 
-btn.automatch.onclick = () => {
-  log(`[未实现] 自动匹配: 降至低速读取 JEDEC ID, 在型号库 (${FLASH_DB.length} 条) 中匹配并调整时钟`);
-};
+// ---------- FLASH 操作 ----------
 
-btn.fileOpen.onclick = () => log('[未实现] 打开文件 → 载入数据缓冲区');
-btn.save.onclick = () => log('[未实现] 保存数据缓冲区 → 文件');
-btn.read.onclick = () => log('[未实现] 读取: JTAG_seq 按 SPI 时序读 FLASH, 按包长自动分包');
-btn.erase.onclick = () => log('[未实现] 擦除 (Chip Erase)');
-btn.blank.onclick = () => log('[未实现] 查空: 检查缓冲区是否全 0xFF');
-btn.write.onclick = () => log('[未实现] 写入: Page Program 按页编程');
-btn.verify.onclick = () => log('[未实现] 校验: 回读与缓冲区比对');
+function requireSpi(): SpiFlash {
+  if (!spi) throw new Error('设备未打开');
+  return spi;
+}
 
-// ---------- 界面状态 ----------
+function requireFlash(): { spi: SpiFlash; model: FlashInfo } {
+  const s = requireSpi();
+  if (!flashInfo) throw new Error('请先选择 FLASH 型号 (或使用自动匹配)');
+  return { spi: s, model: flashInfo };
+}
 
-function updateUi(): void {
-  const has = devices.length > 0 && selectedIdx >= 0;
-  btn.open.disabled = openState || !has;
-  btn.close.disabled = !openState;
-  for (const b of NEEDS_OPEN) b.disabled = !openState;
-  statusDot.className = openState ? 'dot ok' : 'dot err';
-  const d = devices[selectedIdx];
-  statusText.textContent = openState && d ? `已打开: ${devLabel(d)}` : '未打开设备';
+async function applyClock(): Promise<void> {
+  await requireSpi().dap.swjClock(Number(clkDd.option?.value ?? 10000) * 1000);
+  log(`SWJ 时钟: ${clkLabel()}`);
+}
+
+async function onFlashSelected(value: string): Promise<void> {
+  if (value === '') {
+    flashInfo = null;
+    log('未选择 FLASH 型号');
+  } else {
+    flashInfo = FLASH_DB[Number(value)] ?? null;
+    if (flashInfo) {
+      allocBuffer(flashInfo.sizeBytes, `型号 ${flashInfo.vendor} ${flashInfo.model} (${fmtSize(flashInfo.sizeBytes)})`);
+    }
+  }
+  updateUi();
+}
+
+async function opAutomatch(): Promise<void> {
+  const s = requireSpi();
+  await s.dap.swjClock(100_000);
+  log('自动匹配: 时钟降至 100 kHz, 唤醒 FLASH …');
+  await s.wake();
+  const id = await s.readJedec();
+  const idStr = id.toString(16).padStart(6, '0').toUpperCase();
+  const m = FLASH_DB.find((f) => f.jedecId === id);
+  if (m) {
+    flashDd.select(FLASH_DB.indexOf(m) + 1, false);
+    await onFlashSelected(String(FLASH_DB.indexOf(m)));
+    await applyClock();
+    log(`自动匹配成功: JEDEC ${idStr} → ${m.vendor} ${m.model}, 时钟已恢复`);
+  } else {
+    await applyClock();
+    log(`! JEDEC ID ${idStr} 未在型号库中找到 (可在 src/flashdb.ts 中补充)`);
+  }
+}
+
+async function opRead(): Promise<void> {
+  const { spi: s, model } = requireFlash();
+  allocBuffer(model.sizeBytes, `读取 ${model.model}`);
+  const buf = buffer!;
+  const prog = makeProgress(buf.length, '读取');
+  let addr = 0;
+  while (addr < buf.length) {
+    checkAbort();
+    const n = Math.min(s.dataChunk, buf.length - addr);
+    buf.set(await s.readData(addr, n), addr);
+    addr += n;
+    prog(addr);
+  }
+  hex.setData(buf);
+  log(`读取完成: ${fmtSize(buf.length)}`);
+}
+
+async function opErase(): Promise<void> {
+  const { spi: s, model } = requireFlash();
+  log(`全片擦除 ${model.model} (最长可至数分钟, Esc 可停止轮询)…`);
+  await s.chipEraseStart();
+  const t0 = performance.now();
+  let tick = 0;
+  for (;;) {
+    checkAbort();
+    if ((await s.readStatus() & 1) === 0) break;
+    if (performance.now() - t0 > CHIP_ERASE_TIMEOUT_MS) throw new DapError('擦除超时 (WIP 仍为忙)');
+    await sleep(250);
+    if (++tick % 20 === 0) log(`擦除中… ${((performance.now() - t0) / 1000).toFixed(0)}s`);
+  }
+  log(`擦除完成 (${((performance.now() - t0) / 1000).toFixed(1)}s)`);
+}
+
+async function opBlank(): Promise<void> {
+  const { spi: s, model } = requireFlash();
+  const prog = makeProgress(model.sizeBytes, '查空');
+  let addr = 0;
+  let bad = -1;
+  let badVal = 0;
+  while (addr < model.sizeBytes) {
+    checkAbort();
+    const n = Math.min(s.dataChunk, model.sizeBytes - addr);
+    const r = await s.readData(addr, n);
+    for (let i = 0; i < n; i++) {
+      if (r[i] !== 0xff) {
+        bad = addr + i;
+        badVal = r[i]!;
+        break;
+      }
+    }
+    if (bad >= 0) break;
+    addr += n;
+    prog(addr);
+  }
+  log(
+    bad < 0
+      ? '查空通过: 全片 0xFF'
+      : `! 查空失败: 0x${bad.toString(16).padStart(8, '0').toUpperCase()} 处为 0x${badVal.toString(16).padStart(2, '0').toUpperCase()}`,
+  );
+}
+
+async function opWrite(): Promise<void> {
+  const { spi: s } = requireFlash();
+  const buf = buffer!;
+  const pages = Math.ceil(buf.length / PAGE_SIZE);
+  const prog = makeProgress(buf.length, '写入');
+  let written = 0;
+  let skipped = 0;
+  for (let p = 0; p < pages; p++) {
+    checkAbort();
+    const page = buf.subarray(p * PAGE_SIZE, Math.min((p + 1) * PAGE_SIZE, buf.length));
+    let ff = true;
+    for (const b of page) {
+      if (b !== 0xff) {
+        ff = false;
+        break;
+      }
+    }
+    if (ff) {
+      skipped++;
+    } else {
+      for (let off = 0; off < page.length; off += s.dataChunk) {
+        checkAbort();
+        await s.pageProgram(p * PAGE_SIZE + off, page.subarray(off, Math.min(off + s.dataChunk, page.length)));
+        await s.waitWip(PAGE_PROG_TIMEOUT_MS, 5);
+      }
+      written++;
+    }
+    prog((p + 1) * PAGE_SIZE > buf.length ? buf.length : (p + 1) * PAGE_SIZE);
+  }
+  log(`写入完成: ${written} 页写入, ${skipped} 页全 0xFF 跳过`);
+}
+
+async function opVerify(): Promise<void> {
+  const { spi: s } = requireFlash();
+  const buf = buffer!;
+  const prog = makeProgress(buf.length, '校验');
+  const diffs: number[] = [];
+  let addr = 0;
+  while (addr < buf.length) {
+    checkAbort();
+    const n = Math.min(s.dataChunk, buf.length - addr);
+    const r = await s.readData(addr, n);
+    for (let i = 0; i < n; i++) {
+      if (r[i] !== buf[addr + i] && diffs.length < 8) diffs.push(addr + i);
+    }
+    addr += n;
+    prog(addr);
+    if (diffs.length >= 8) break;
+  }
+  if (diffs.length === 0) {
+    log(`校验通过: ${fmtSize(buf.length)} 全部一致`);
+  } else {
+    log(`! 校验失败, 首个差异 @ 0x${diffs[0]!.toString(16).padStart(8, '0').toUpperCase()} (期望 ${buf[diffs[0]!]!.toString(16).padStart(2, '0').toUpperCase()})`);
+  }
+}
+
+async function runOp(name: string, fn: () => Promise<void>): Promise<void> {
+  if (busy) return;
+  busy = true;
+  abort = false;
+  updateUi();
+  try {
+    await fn();
+  } catch (e) {
+    log(`! ${name}: ${err(e)}`);
+  } finally {
+    busy = false;
+    updateUi();
+  }
+}
+
+// ---------- 文件 ----------
+
+fileInput.addEventListener('change', async () => {
+  const f = fileInput.files?.[0];
+  fileInput.value = '';
+  if (!f || busy) return;
+  try {
+    const data = new Uint8Array(await f.arrayBuffer());
+    if (flashInfo && data.length > flashInfo.sizeBytes) {
+      log(`! 文件 ${fmtSize(data.length)} 超过 ${flashInfo.model} 容量 ${fmtSize(flashInfo.sizeBytes)}`);
+      return;
+    }
+    buffer = data;
+    hex.setData(buffer);
+    updateBufInfo();
+    log(`已载入 ${f.name} (${fmtSize(data.length)})`);
+    updateUi();
+  } catch (e) {
+    log(`! 读取文件失败: ${err(e)}`);
+  }
+});
+
+function saveBuffer(): void {
+  if (!buffer) return;
+  const t = new Date();
+  const p = (n: number, w: number) => String(n).padStart(w, '0');
+  const name = `flash_${t.getFullYear()}${p(t.getMonth() + 1, 2)}${p(t.getDate(), 2)}_${p(t.getHours(), 2)}${p(t.getMinutes(), 2)}${p(t.getSeconds(), 2)}.bin`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buffer], { type: 'application/octet-stream' }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  log(`已保存 ${name} (${fmtSize(buffer.length)})`);
 }
 
 // ---------- 事件绑定 ----------
@@ -208,19 +480,47 @@ btn.pair.onclick = async () => {
 };
 
 btn.refresh.onclick = () => refreshDevices();
+btn.open.onclick = () => runOp('打开设备', opOpen);
+btn.close.onclick = () => runOp('关闭设备', opClose);
+btn.automatch.onclick = () => runOp('自动匹配', opAutomatch);
+btn.read.onclick = () => runOp('读取', opRead);
+btn.erase.onclick = () => runOp('擦除', opErase);
+btn.blank.onclick = () => runOp('查空', opBlank);
+btn.write.onclick = () => runOp('写入', opWrite);
+btn.verify.onclick = () => runOp('校验', opVerify);
+btn.fileOpen.onclick = () => fileInput.click();
+btn.save.onclick = saveBuffer;
 btn.clearLog.onclick = () => {
   logEl.textContent = '';
 };
 
+clkDd.onchange = () => {
+  if (dap && !busy) void applyClock().catch((e) => log(`! ${err(e)}`));
+};
+flashDd.onchange = (o) => {
+  void onFlashSelected(o.value).catch((e) => log(`! ${err(e)}`));
+};
+
 navigator.usb.ondisconnect = (e: USBConnectionEvent) => {
   log(`设备移除: ${devLabel(e.device)}`);
-  if (openState && devices[selectedIdx] === e.device) openState = false;
+  if (dap && e.device === dap.device) {
+    dap = null;
+    spi = null;
+    log('! 当前设备已被拔出');
+  }
   void refreshDevices();
 };
 navigator.usb.onconnect = (e: USBConnectionEvent) => {
   log(`设备接入: ${devLabel(e.device)}`);
   void refreshDevices();
 };
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && busy) {
+    abort = true;
+    log('收到取消请求, 正在停止…');
+  }
+});
 
 // ---------- 初始化 ----------
 
@@ -245,6 +545,6 @@ flashDd.setOptions([
   })),
 ]);
 
-log('CMSIS-DAP Flash Tool 就绪 (界面原型, 操作函数为占位).');
-renderHex(BUFFER);
+log('CMSIS-DAP Flash Tool 就绪.');
+updateBufInfo();
 void refreshDevices();

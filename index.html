@@ -64,6 +64,7 @@
     font-size: 11px; color: #77776f; border: 1px solid #a8a8a2;
     padding: 0 5px; line-height: 17px; border-radius: 2px;
   }
+  .cap.no { color: #a14833; border-color: #c9a09a; }
   .btnrow { margin-top: 10px; }
   .statusline { margin-top: 9px; }
   .dot {
@@ -71,6 +72,7 @@
     margin-right: 8px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.25);
   }
   .dot.ok { background: #1f8a3c; }
+  .dot.warn { background: #d99a1e; }
   .dot.err { background: #c23a2b; }
   #status-text { color: #44443f; }
 
@@ -142,6 +144,7 @@
       <button id="btn-write" disabled>写入</button>
       <button id="btn-verify" disabled>校验</button>
     </div>
+    <input type="file" id="file-input" hidden />
   </div>
 </section>
 
