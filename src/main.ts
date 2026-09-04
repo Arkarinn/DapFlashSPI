@@ -50,7 +50,7 @@ let flashInfo: FlashInfo | null = null;
 let buffer: Uint8Array<ArrayBuffer> | null = null;
 let busy = false;
 let abort = false;
-const capsMap = new Map<USBDevice, { swd: boolean; jtag: boolean }>();
+const capsMap = new Map<USBDevice, { jtag?: boolean; swd?: boolean }>();
 
 // ---------- 工具函数 ----------
 
@@ -194,13 +194,19 @@ async function opOpen(): Promise<void> {
   log(`正在打开 ${devLabel(dev)} …`);
   try {
     dap = await CmsisDap.open(dev, (s) => log(`  · ${s}`));
-    const caps = await dap.getCaps();
-    if (caps) capsMap.set(dev, caps);
-    renderDevices();
-    if (caps && !caps.jtag) throw new DapError('该设备不支持 JTAG (SPI 需要 JTAG 模式)');
-    await dap.hostStatus(true);
+    log('  · 设置 SWJ 时钟 …');
     await dap.swjClock(Number(clkDd.option?.value ?? 10000) * 1000);
+    log('  · 连接 JTAG …');
     await dap.connectJtag();
+    // 不主动查询能力位 (DAP_Info 0xF0): 个别固件会因此复位;
+    // JTAG 支持以连接成功为准, SWD 保持未知
+    capsMap.set(dev, { jtag: true });
+    renderDevices();
+    try {
+      await dap.hostStatus(true); // LED 指示, 纯装饰, 失败不影响
+    } catch {
+      /* 忽略 */
+    }
     spi = new SpiFlash(dap);
     log(`已就绪: 包长 ${dap.pktSize}B, 单次事务 ${spi.dataChunk}B, JTAG 已连接, ${clkLabel()}`);
   } catch (e) {
