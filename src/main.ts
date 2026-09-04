@@ -190,11 +190,9 @@ async function refreshDevices(): Promise<void> {
 
 async function opOpen(): Promise<void> {
   const dev = devices[selectedIdx];
-  if (!dev || dap || busy) return;
-  busy = true;
-  updateUi();
+  if (!dev) throw new Error('未选择设备');
+  log(`正在打开 ${devLabel(dev)} …`);
   try {
-    log(`正在打开 ${devLabel(dev)} …`);
     dap = await CmsisDap.open(dev, (s) => log(`  · ${s}`));
     const caps = await dap.getCaps();
     if (caps) capsMap.set(dev, caps);
@@ -223,14 +221,11 @@ async function opOpen(): Promise<void> {
         : '';
     log(`! 打开失败: ${msg}${hint}`);
   }
-  busy = false;
   updateUi();
 }
 
 async function opClose(): Promise<void> {
-  if (!dap || busy) return;
-  busy = true;
-  updateUi();
+  if (!dap) throw new Error('设备未打开');
   const dev = dap.device;
   try {
     await dap.disconnect();
@@ -239,10 +234,14 @@ async function opClose(): Promise<void> {
     log('设备已关闭');
   } catch (e) {
     log(`! 关闭出错: ${err(e)}`);
+    try {
+      await dev.close();
+    } catch {
+      /* 忽略 */
+    }
   }
   dap = null;
   spi = null;
-  busy = false;
   updateUi();
 }
 
