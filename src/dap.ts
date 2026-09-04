@@ -10,22 +10,24 @@ interface DapIface {
   inSize: number;
 }
 
-// 寻找带 bulk In/Out 端点的接口, 优先 vendor-specific (class 0xFF), 即 CMSIS-DAP v2 接口
-function findDapInterface(dev: USBDevice): DapIface | null {
+// 列出带 bulk In/Out 端点的接口, 优先 vendor-specific (class 0xFF), 即 CMSIS-DAP v2 接口
+function listDapInterfaces(dev: USBDevice): DapIface[] {
+  const out: DapIface[] = [];
   const candidates = (dev.configuration?.interfaces ?? []).flatMap((i) =>
     i.alternates.map((a) => ({ i, a })),
   );
   for (const preferVendor of [true, false]) {
     for (const { i, a } of candidates) {
-      if (preferVendor && a.interfaceClass !== 0xff) continue;
-      const out = a.endpoints.find((e) => e.type === 'bulk' && e.direction === 'out');
-      const inn = a.endpoints.find((e) => e.type === 'bulk' && e.direction === 'in');
-      if (out && inn) {
-        return { interfaceNumber: i.interfaceNumber, outEp: out.endpointNumber, inEp: inn.endpointNumber, inSize: inn.packetSize };
+      if (preferVendor !== (a.interfaceClass === 0xff)) continue;
+      if (out.some((o) => o.interfaceNumber === i.interfaceNumber)) continue;
+      const epOut = a.endpoints.find((e) => e.type === 'bulk' && e.direction === 'out');
+      const epIn = a.endpoints.find((e) => e.type === 'bulk' && e.direction === 'in');
+      if (epOut && epIn) {
+        out.push({ interfaceNumber: i.interfaceNumber, outEp: epOut.endpointNumber, inEp: epIn.endpointNumber, inSize: epIn.packetSize });
       }
     }
   }
-  return null;
+  return out;
 }
 
 export class CmsisDap {
@@ -33,6 +35,7 @@ export class CmsisDap {
   pktSize: number; // DAP 命令包长 (字节), 分包依据
   private iface: DapIface;
   private lock: Promise<unknown> = Promise.resolve(); // 串行化 USB 收发
+  private broken = false; // 传输超时/错误后标记, 防止继续使用
 
   private constructor(device: USBDevice, iface: DapIface) {
     this.device = device;
@@ -40,19 +43,37 @@ export class CmsisDap {
     this.pktSize = iface.inSize;
   }
 
-  static async open(dev: USBDevice): Promise<CmsisDap> {
+  static async open(dev: USBDevice, log?: (s: string) => void): Promise<CmsisDap> {
     await dev.open();
+    log?.('USB 已打开');
     try {
       if (!dev.configuration && dev.configurations.length > 0) {
         await dev.selectConfiguration(dev.configurations[0].configurationValue);
       }
-      const i = findDapInterface(dev);
-      if (!i) throw new DapError('未找到 bulk 输入/输出端点 (需要 CMSIS-DAP v2 固件)');
-      await dev.claimInterface(i.interfaceNumber);
-      const d = new CmsisDap(dev, i);
-      const ps = await d.info(0xff); // DAP_Info: 包长
-      if (ps !== null && ps >= 64) d.pktSize = ps;
-      return d;
+      const list = listDapInterfaces(dev);
+      if (list.length === 0) throw new DapError('未找到 bulk 输入/输出端点 (需要 CMSIS-DAP v2 固件)');
+      // 逐个接口探测: claim 后用短超时 DAP_Info 验证是否为 DAP 命令接口
+      let lastErr: unknown = null;
+      for (const i of list) {
+        try {
+          await dev.claimInterface(i.interfaceNumber);
+          log?.(`接口 ${i.interfaceNumber} 已占用 (OUT ep${i.outEp} / IN ep${i.inEp})`);
+          const d = new CmsisDap(dev, i);
+          const ps = await d.info(0xff, 1000); // DAP_Info: 包长 (探测)
+          if (ps !== null && ps >= 64) d.pktSize = ps;
+          log?.(`DAP_Info 应答正常, 包长 ${d.pktSize}B`);
+          return d;
+        } catch (e) {
+          lastErr = e;
+          log?.(`接口 ${i.interfaceNumber} 不可用: ${e instanceof Error ? e.message : String(e)}`);
+          try {
+            await dev.releaseInterface(i.interfaceNumber);
+          } catch {
+            /* 忽略 */
+          }
+        }
+      }
+      throw lastErr ?? new DapError('没有可用的 DAP 接口');
     } catch (e) {
       try {
         await dev.close();
@@ -64,27 +85,51 @@ export class CmsisDap {
   }
 
   // 发送一条命令包, 返回去掉状态字节后的响应 (状态非 0 视为错误)
-  async cmd(req: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
-    const p = this.lock.then(() => this.raw(req));
+  async cmd(req: Uint8Array<ArrayBuffer>, timeoutMs = 5000): Promise<Uint8Array> {
+    if (this.broken) throw new DapError('传输已中断, 请关闭设备后重新打开');
+    const p = this.lock.then(() => this.raw(req, timeoutMs));
     this.lock = p.catch(() => undefined);
     return p;
   }
 
-  private async raw(req: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
+  private async raw(req: Uint8Array<ArrayBuffer>, timeoutMs: number): Promise<Uint8Array> {
     if (req.length > this.pktSize) throw new DapError(`命令超出包长 (${req.length} > ${this.pktSize})`);
-    const out = await this.device.transferOut(this.iface.outEp, req);
-    if (out.status !== 'ok') throw new DapError(`USB 发送失败: ${out.status}`);
-    const inn = await this.device.transferIn(this.iface.inEp, this.iface.inSize);
-    if (inn.status !== 'ok' || !inn.data) throw new DapError(`USB 接收失败: ${inn.status}`);
-    const r = new Uint8Array(inn.data.buffer, inn.data.byteOffset, inn.data.byteLength);
-    if (r.length < 1) throw new DapError('DAP 空响应');
-    if (r[0] !== 0x00) throw new DapError(`DAP 错误 0x${r[0].toString(16).padStart(2, '0').toUpperCase()}`);
-    return r.subarray(1);
+    try {
+      const out = await this.withTimeout(this.device.transferOut(this.iface.outEp, req), timeoutMs, 'USB 发送');
+      if (out.status !== 'ok') throw new DapError(`USB 发送失败: ${out.status}`);
+      const inn = await this.withTimeout(this.device.transferIn(this.iface.inEp, this.iface.inSize), timeoutMs, 'USB 接收');
+      if (inn.status !== 'ok' || !inn.data) throw new DapError(`USB 接收失败: ${inn.status}`);
+      const r = new Uint8Array(inn.data.buffer, inn.data.byteOffset, inn.data.byteLength);
+      if (r.length < 1) throw new DapError('DAP 空响应');
+      if (r[0] !== 0x00) throw new DapError(`DAP 错误 0x${r[0].toString(16).padStart(2, '0').toUpperCase()}`);
+      return r.subarray(1);
+    } catch (e) {
+      // 一次失败后传输状态不可信 (可能仍有挂起的 transferIn), 标记并尝试强制关闭
+      this.broken = true;
+      void this.device.close().catch(() => undefined);
+      throw e;
+    }
+  }
+
+  private withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const id = setTimeout(() => reject(new DapError(`${what}超时 (${ms} ms), 设备无响应`)), ms);
+      p.then(
+        (v) => {
+          clearTimeout(id);
+          resolve(v);
+        },
+        (e) => {
+          clearTimeout(id);
+          reject(e);
+        },
+      );
+    });
   }
 
   // DAP_Info: 数值型信息 (包长/包数/能力位), 不支持时返回 null
-  async info(id: number): Promise<number | null> {
-    const r = await this.cmd(Uint8Array.of(0x00, id));
+  async info(id: number, timeoutMs?: number): Promise<number | null> {
+    const r = await this.cmd(Uint8Array.of(0x00, id), timeoutMs);
     if (r.length < 2 || r[0] === 0) return null;
     let v = 0;
     for (let i = 1; i <= Math.min(r[0], 4); i++) v |= r[i]! << (8 * (i - 1));

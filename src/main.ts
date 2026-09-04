@@ -192,7 +192,7 @@ async function opOpen(): Promise<void> {
   updateUi();
   try {
     log(`正在打开 ${devLabel(dev)} …`);
-    dap = await CmsisDap.open(dev);
+    dap = await CmsisDap.open(dev, (s) => log(`  · ${s}`));
     const caps = await dap.getCaps();
     if (caps) capsMap.set(dev, caps);
     renderDevices();
@@ -212,7 +212,13 @@ async function opOpen(): Promise<void> {
     }
     dap = null;
     spi = null;
-    log(`! 打开失败: ${err(e)}${err(e).includes('claim') ? ' (Windows 下缺少 WinUSB 驱动时常见, 见 README)' : ''}`);
+    const msg = err(e);
+    const hint = /claim|denied|busy/i.test(msg)
+      ? ' — 设备可能被其他程序占用 (如正在调试的 Keil/IDE), 或接口缺少 WinUSB 驱动 (见 README)'
+      : msg.includes('超时')
+        ? ' — 设备接受了请求但无应答, 可尝试重新插拔'
+        : '';
+    log(`! 打开失败: ${msg}${hint}`);
   }
   busy = false;
   updateUi();
