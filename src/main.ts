@@ -180,7 +180,8 @@ function renderDevices(): void {
 
 async function refreshDevices(): Promise<void> {
   devices = await navigator.usb.getDevices();
-  selectedIdx = Math.min(selectedIdx, devices.length - 1);
+  if (selectedIdx >= devices.length) selectedIdx = devices.length - 1;
+  if (selectedIdx < 0 && devices.length > 0) selectedIdx = 0; // 页面加载后自动选中首个设备
   renderDevices();
   updateUi();
 }
