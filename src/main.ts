@@ -16,7 +16,7 @@ const deviceListEl = $('device-list');
 const statusDot = $('status-dot');
 const statusText = $('status-text');
 const clkDd = new Dropdown($('clk-dd'));
-const flashDd = new Dropdown($('flash-dd'));
+const flashDd = new Dropdown($('flash-dd'), { filter: true });
 const bufInfo = $('buf-info');
 const logEl = $<HTMLElement>('log');
 const fileInput = $<HTMLInputElement>('file-input');
@@ -38,7 +38,6 @@ const btn = {
   clearLog: $<HTMLButtonElement>('btn-clear-log'),
 };
 
-const PAGE_SIZE = 256;
 const CHIP_ERASE_TIMEOUT_MS = 300_000; // 大容量芯片全片擦除最长可达数分钟
 const PAGE_PROG_TIMEOUT_MS = 200;
 
@@ -363,17 +362,18 @@ async function opBlank(): Promise<void> {
 }
 
 async function opWrite(): Promise<void> {
-  const { spi: s } = requireFlash();
+  const { spi: s, model } = requireFlash();
+  const page = model.page;
   const buf = buffer!;
-  const pages = Math.ceil(buf.length / PAGE_SIZE);
+  const pages = Math.ceil(buf.length / page);
   const prog = makeProgress(buf.length, '写入');
   let written = 0;
   let skipped = 0;
   for (let p = 0; p < pages; p++) {
     checkAbort();
-    const page = buf.subarray(p * PAGE_SIZE, Math.min((p + 1) * PAGE_SIZE, buf.length));
+    const slice = buf.subarray(p * page, Math.min((p + 1) * page, buf.length));
     let ff = true;
-    for (const b of page) {
+    for (const b of slice) {
       if (b !== 0xff) {
         ff = false;
         break;
@@ -382,14 +382,14 @@ async function opWrite(): Promise<void> {
     if (ff) {
       skipped++;
     } else {
-      for (let off = 0; off < page.length; off += s.dataChunk) {
+      for (let off = 0; off < slice.length; off += s.dataChunk) {
         checkAbort();
-        await s.pageProgram(p * PAGE_SIZE + off, page.subarray(off, Math.min(off + s.dataChunk, page.length)));
+        await s.pageProgram(p * page + off, slice.subarray(off, Math.min(off + s.dataChunk, slice.length)));
         await s.waitWip(PAGE_PROG_TIMEOUT_MS, 5);
       }
       written++;
     }
-    prog((p + 1) * PAGE_SIZE > buf.length ? buf.length : (p + 1) * PAGE_SIZE);
+    prog((p + 1) * page > buf.length ? buf.length : (p + 1) * page);
   }
   log(`写入完成: ${written} 页写入, ${skipped} 页全 0xFF 跳过`);
 }
