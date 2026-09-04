@@ -101,7 +101,10 @@ export class CmsisDap {
       if (inn.status !== 'ok' || !inn.data) throw new DapError(`USB 接收失败: ${inn.status}`);
       const r = new Uint8Array(inn.data.buffer, inn.data.byteOffset, inn.data.byteLength);
       if (r.length < 1) throw new DapError('DAP 空响应');
-      if (r[0] !== 0x00) throw new DapError(`DAP 错误 0x${r[0].toString(16).padStart(2, '0').toUpperCase()}`);
+      // 响应首字节是命令 ID 回显 (官方固件 DAP.c: *response++ = *request), 校验以防失步
+      if (r[0] !== req[0]) {
+        throw new DapError(`DAP 响应不匹配: 发送 0x${req[0].toString(16)} 收到 0x${r[0].toString(16)}`);
+      }
       return r.subarray(1);
     } catch (e) {
       // 一次失败后传输状态不可信 (可能仍有挂起的 transferIn), 标记并尝试强制关闭
@@ -143,11 +146,19 @@ export class CmsisDap {
     return { swd: !!(v & 1), jtag: !!(v & 2) };
   }
 
+  // 多数命令 payload 首字节为 DAP_OK(0x00)/DAP_ERROR(0xFF)
+  private static expectOk(r: Uint8Array, what: string): void {
+    if (r.length < 1 || r[0] !== 0x00) {
+      throw new DapError(`${what}失败 (0x${(r[0] ?? -1).toString(16).padStart(2, '0').toUpperCase()})`);
+    }
+  }
+
   // DAP_SWJ_Clock: 设置 TCK 频率 (Hz)
   async swjClock(hz: number): Promise<void> {
-    await this.cmd(
+    const r = await this.cmd(
       Uint8Array.of(0x08, hz & 0xff, (hz >>> 8) & 0xff, (hz >>> 16) & 0xff, (hz >>> 24) & 0xff),
     );
+    CmsisDap.expectOk(r, '设置时钟');
   }
 
   // DAP_Connect: 进入 JTAG 模式 (TCK=SCK, TMS=CS, TDI=MOSI, TDO=MISO)
@@ -157,18 +168,20 @@ export class CmsisDap {
   }
 
   async disconnect(): Promise<void> {
-    await this.cmd(Uint8Array.of(0x03));
+    CmsisDap.expectOk(await this.cmd(Uint8Array.of(0x03)), '断开');
   }
 
   // DAP_HostStatus: connected 指示灯
   async hostStatus(on: boolean): Promise<void> {
-    await this.cmd(Uint8Array.of(0x01, 0x00, on ? 1 : 0));
+    CmsisDap.expectOk(await this.cmd(Uint8Array.of(0x01, 0x00, on ? 1 : 0)), '指示灯');
   }
 
   // DAP_JTAG_Sequence: 发送预组好的序列包, 返回捕获的 TDO 数据 (前 expect 字节)
+  // 响应 payload = [DAP_OK][TDO...], 请求 = [0x10][序列个数]([info][tdi...])*
   async jtagSequence(req: Uint8Array<ArrayBuffer>, expect: number): Promise<Uint8Array> {
     const r = await this.cmd(req);
-    if (r.length < expect) throw new DapError(`JTAG 序列响应不足 (${r.length}/${expect})`);
-    return r.subarray(0, expect);
+    CmsisDap.expectOk(r, 'JTAG 序列');
+    if (r.length < 1 + expect) throw new DapError(`JTAG 序列响应不足 (${r.length - 1}/${expect})`);
+    return r.subarray(1, 1 + expect);
   }
 }

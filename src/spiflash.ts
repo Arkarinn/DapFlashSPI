@@ -48,22 +48,21 @@ export class SpiFlash {
     const cut = Math.min(readFrom, out.length);
     push(0, cut, false);
     push(cut, out.length, true);
+    seqs.push({ data: new Uint8Array([0]), tms: 1, capture: false }); // 结尾段: TMS=1 拉高 CS (1 个 TCK)
     const expect = out.length - cut;
 
-    // 组包: [0x10] ([info][tdi...])* [结尾段: TMS=1, 1位] [0x00 终止]
-    let len = 4; // 命令字节 + 结尾段(info+tdi) + 终止符
+    // 组包: [0x10][序列个数]([info][tdi...])*  (官方固件 DAP_JTAG_Sequence 格式)
+    let len = 2;
     for (const s of seqs) len += 1 + s.data.length;
     const pkt = new Uint8Array(len);
     let p = 0;
     pkt[p++] = 0x10;
+    pkt[p++] = seqs.length;
     for (const s of seqs) {
       pkt[p++] = (s.tms ? 0x40 : 0) | (s.capture ? 0x80 : 0) | ((s.data.length * 8) & 0x3f);
       pkt.set(s.data, p);
       p += s.data.length;
     }
-    pkt[p++] = 0x41; // TMS=1, 1 个 TCK (CS 拉高)
-    pkt[p++] = 0x00; // 结尾段 TDI (无关)
-    pkt[p] = 0x00; // 序列表终止符
 
     const resp = await this.dap.jtagSequence(pkt, expect);
     return rev(resp);
