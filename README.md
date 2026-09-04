@@ -61,7 +61,7 @@ Then open <http://localhost:5177> with Chrome/Edge.
 ### Shortcut Commands
 
 | Button | Bytes | Description |
-|---|---|---|
+| --- | --- | --- |
 | Info·固件版本 | `00 04` | DAP_Info: firmware version |
 | Info·能力 | `00 F0` | DAP_Info: capability bits |
 | Connect·SWD | `02 01` | DAP_Connect: select SWD port |

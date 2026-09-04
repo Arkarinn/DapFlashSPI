@@ -1,6 +1,6 @@
-// CMSIS-DAP WebUSB 调试小工具
-// 需 Chrome/Edge 等支持 WebUSB 的浏览器, 且页面来自 http://localhost 或 HTTPS
-// 仅支持 bulk 传输 (CMSIS-DAP v2); v1 为 HID 接口, 不在本工具范围内
+// CMSIS-DAP Flash Tool — 界面原型
+// 按 TODO.md 设计; 仅实现界面与互锁, 操作函数为占位 (标注 [未实现]/[演示])
+import { FLASH_DB } from './flashdb.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -8,76 +8,55 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return el as T;
 };
 
-// 常见 CMSIS-DAP 设备, 仅用于列表标注与搜索过滤
-const KNOWN_DEVICES: Array<{ vid: number; pid: number; name: string }> = [
-  { vid: 0x0d28, pid: 0x0204, name: 'Arm mbed CMSIS-DAP (DAPLink)' },
-  { vid: 0x03eb, pid: 0x2111, name: 'Atmel/Microchip EDBG (CMSIS-DAP)' },
-  { vid: 0x1fc9, pid: 0x0143, name: 'NXP LPC-Link2 (CMSIS-DAP)' },
-];
-
-// 快捷命令 (CMSIS-DAP 命令字节, 点击填入输入框)
-const PRESETS: Array<[string, string]> = [
-  ['Info·固件版本', '00 04'],
-  ['Info·能力', '00 F0'],
-  ['Connect·SWD', '02 01'],
-  ['SWJ Clock·1MHz', '08 40 42 0F 00'],
-  ['ResetTarget', '06'],
-];
-
-interface Session {
-  device: USBDevice;
-  interfaceNumber: number;
-  outEp: number;
-  inEp: number;
-  inSize: number;
-}
-
-let devices: USBDevice[] = [];
-let session: Session | null = null;
-
-const deviceSelect = $<HTMLSelectElement>('device-select');
-const hexInput = $<HTMLInputElement>('hex-input');
-const autoRecv = $<HTMLInputElement>('auto-recv');
-const statusEl = $('status');
+const deviceListEl = $('device-list');
+const statusDot = $('status-dot');
+const statusText = $('status-text');
+const clkSel = $<HTMLSelectElement>('clk-sel');
+const flashSel = $<HTMLSelectElement>('flash-sel');
+const hexView = $('hex-view');
+const bufInfo = $('buf-info');
 const logEl = $<HTMLElement>('log');
-const presetEl = $('presets');
 
-const buttons = {
-  addDap: $<HTMLButtonElement>('btn-add-dap'),
-  addAny: $<HTMLButtonElement>('btn-add-any'),
+const btn = {
+  pair: $<HTMLButtonElement>('btn-pair'),
   refresh: $<HTMLButtonElement>('btn-refresh'),
   open: $<HTMLButtonElement>('btn-open'),
   close: $<HTMLButtonElement>('btn-close'),
-  send: $<HTMLButtonElement>('btn-send'),
-  recv: $<HTMLButtonElement>('btn-recv'),
+  automatch: $<HTMLButtonElement>('btn-automatch'),
+  fileOpen: $<HTMLButtonElement>('btn-file-open'),
+  save: $<HTMLButtonElement>('btn-save'),
+  read: $<HTMLButtonElement>('btn-read'),
+  erase: $<HTMLButtonElement>('btn-erase'),
+  blank: $<HTMLButtonElement>('btn-blank'),
+  write: $<HTMLButtonElement>('btn-write'),
+  verify: $<HTMLButtonElement>('btn-verify'),
   clearLog: $<HTMLButtonElement>('btn-clear-log'),
 };
+
+// 需要设备处于打开状态的按钮 (互锁)
+const NEEDS_OPEN: HTMLButtonElement[] = [
+  btn.automatch, btn.read, btn.erase, btn.blank, btn.write, btn.verify,
+];
+
+let devices: USBDevice[] = [];
+let selectedIdx = -1;
+let openState = false; // 界面演示状态; 实际打开/claim/连接待实现
+
+// 演示数据: 1KB 全 0xFF (空 FLASH 常态), 后续由 读取/打开文件 填充
+const BUFFER = new Uint8Array(1024).fill(0xff);
 
 // ---------- 工具函数 ----------
 
 const err = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-
-const hex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
-
 const hex16 = (n: number): string => n.toString(16).padStart(4, '0').toUpperCase();
+const hex8 = (n: number): string => n.toString(16).padStart(2, '0').toUpperCase();
 
-function parseHex(text: string): Uint8Array<ArrayBuffer> {
-  // 允许空格/逗号/冒号分隔, "0x" 前缀, 以及 "0004" 这类连续偶数位写法
-  const tokens = text.replace(/0[xX]/g, ' ').split(/[^0-9a-fA-F]+/).filter((t) => t.length > 0);
-  const bytes: number[] = [];
-  for (const t of tokens) {
-    if (t.length % 2 !== 0) throw new Error(`无效 hex 片段 "${t}" (位数须为偶数)`);
-    for (let i = 0; i < t.length; i += 2) bytes.push(parseInt(t.slice(i, i + 2), 16));
-  }
-  if (bytes.length === 0) throw new Error('请输入要发送的 hex 字节');
-  if (bytes.length > 1024) throw new Error('数据过长 (超过 1024 字节)');
-  return new Uint8Array(bytes);
+function fmtSize(n: number): string {
+  return n >= 1048576 ? `${n / 1048576} MB` : `${n / 1024} KB`;
 }
 
-function label(dev: USBDevice): string {
-  const known = KNOWN_DEVICES.find((k) => k.vid === dev.vendorId && k.pid === dev.productId);
-  return `${dev.productName || '未知设备'} [${hex16(dev.vendorId)}:${hex16(dev.productId)}]${known ? ` · ${known.name}` : ''}`;
+function devLabel(d: USBDevice): string {
+  return `${d.productName || '未命名设备'} [${hex16(d.vendorId)}:${hex16(d.productId)}]`;
 }
 
 function log(msg: string): void {
@@ -88,148 +67,118 @@ function log(msg: string): void {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-function updateUi(): void {
-  const dev = devices[deviceSelect.selectedIndex];
-  buttons.open.disabled = session !== null || !dev;
-  buttons.close.disabled = session === null;
-  buttons.send.disabled = session === null;
-  buttons.recv.disabled = session === null;
-  if (session) {
-    statusEl.textContent = `已连接: ${label(session.device)} · 接口 ${session.interfaceNumber} (OUT ep${session.outEp} / IN ep${session.inEp})`;
-    statusEl.className = 'ok';
-  } else {
-    statusEl.textContent = '未打开设备';
-    statusEl.className = '';
-  }
-}
+// ---------- 设备管理 ----------
 
-// ---------- 设备列表 ----------
-
-async function refreshDeviceList(): Promise<void> {
-  devices = await navigator.usb.getDevices();
-  const prev = deviceSelect.selectedIndex;
-  deviceSelect.innerHTML = '';
+function renderDevices(): void {
+  deviceListEl.innerHTML = '';
   if (devices.length === 0) {
-    const opt = document.createElement('option');
-    opt.textContent = '(无已授权设备, 请点击下方"添加设备")';
-    opt.disabled = true;
-    deviceSelect.appendChild(opt);
-  } else {
-    for (const d of devices) {
-      const opt = document.createElement('option');
-      opt.textContent = label(d);
-      deviceSelect.appendChild(opt);
-    }
-    deviceSelect.selectedIndex = Math.max(0, Math.min(prev, devices.length - 1));
+    const empty = document.createElement('div');
+    empty.className = 'dev-empty';
+    empty.textContent = '(无已配对设备, 点击"配对"添加)';
+    deviceListEl.appendChild(empty);
+    return;
   }
+  devices.forEach((d, i) => {
+    const row = document.createElement('div');
+    row.className = 'dev-item' + (i === selectedIdx ? ' selected' : '');
+
+    const name = document.createElement('span');
+    name.className = 'dev-name';
+    name.textContent = d.productName || '未命名设备';
+
+    const id = document.createElement('span');
+    id.className = 'dev-id';
+    id.textContent = `${hex16(d.vendorId)}:${hex16(d.productId)}`;
+
+    // 是否支持 JTAG/SWD: 打开后经 DAP_Info 查询 (待实现)
+    for (const cap of ['JTAG ?', 'SWD ?']) {
+      const c = document.createElement('span');
+      c.className = 'cap';
+      c.title = '打开后通过 DAP_Info 查询';
+      c.textContent = cap;
+      row.appendChild(c);
+    }
+    row.prepend(id, name);
+    row.onclick = () => {
+      selectedIdx = i;
+      renderDevices();
+      updateUi();
+    };
+    deviceListEl.appendChild(row);
+  });
+}
+
+async function refreshDevices(): Promise<void> {
+  devices = await navigator.usb.getDevices();
+  selectedIdx = Math.min(selectedIdx, devices.length - 1);
+  renderDevices();
   updateUi();
 }
 
-async function addDevice(filters: USBDeviceFilter[]): Promise<void> {
-  try {
-    const dev = await navigator.usb.requestDevice({ filters });
-    log(`已授权: ${label(dev)}`);
-    await refreshDeviceList();
-    const idx = devices.findIndex(
-      (d) => d === dev || (d.vendorId === dev.vendorId && d.productId === dev.productId && d.serialNumber === dev.serialNumber),
-    );
-    if (idx >= 0) deviceSelect.selectedIndex = idx;
-  } catch (e) {
-    if ((e as DOMException)?.name === 'NotFoundError') return; // 用户取消了浏览器弹窗
-    log(`! 添加设备失败: ${err(e)}`);
+// ---------- FLASH 操作 ----------
+
+function renderHex(buf: Uint8Array): void {
+  const table = document.createElement('table');
+  table.className = 'hex';
+  const head = table.createTHead().insertRow();
+  for (const label of ['地址', ...Array.from({ length: 16 }, (_, i) => i.toString(16).toUpperCase())]) {
+    const th = document.createElement('th');
+    th.textContent = label;
+    head.appendChild(th);
   }
+  const body = table.createTBody();
+  for (let off = 0; off < buf.length; off += 16) {
+    const row = body.insertRow();
+    row.insertCell().textContent = off.toString(16).padStart(8, '0').toUpperCase();
+    for (let i = 0; i < 16; i++) row.insertCell().textContent = hex8(buf[off + i]!);
+  }
+  hexView.innerHTML = '';
+  hexView.appendChild(table);
+  bufInfo.textContent =
+    `缓冲区 0x00000000 – 0x${(buf.length - 1).toString(16).padStart(8, '0').toUpperCase()}` +
+    ` (${fmtSize(buf.length)}, 演示数据)`;
+}
+
+// ---------- 操作函数 (占位, 待实现) ----------
+
+btn.open.onclick = () => {
+  const d = devices[selectedIdx];
+  if (!d || openState) return;
+  openState = true;
+  log(`[演示] 打开 ${devLabel(d)}: claim 接口/定位端点/DAP 连接待实现`);
   updateUi();
-}
+};
 
-// ---------- 打开 / 关闭 ----------
-
-// 寻找带 bulk In/Out 端点的接口, 优先 vendor-specific (class 0xFF), 即 CMSIS-DAP v2 接口
-function findDapInterface(dev: USBDevice): Omit<Session, 'device'> | null {
-  const candidates = (dev.configuration?.interfaces ?? []).flatMap((i) =>
-    i.alternates.map((a) => ({ i, a })),
-  );
-  for (const preferVendor of [true, false]) {
-    for (const { i, a } of candidates) {
-      if (preferVendor && a.interfaceClass !== 0xff) continue;
-      const out = a.endpoints.find((e) => e.type === 'bulk' && e.direction === 'out');
-      const inn = a.endpoints.find((e) => e.type === 'bulk' && e.direction === 'in');
-      if (out && inn) {
-        return { interfaceNumber: i.interfaceNumber, outEp: out.endpointNumber, inEp: inn.endpointNumber, inSize: inn.packetSize };
-      }
-    }
-  }
-  return null;
-}
-
-async function openSelected(): Promise<void> {
-  const dev = devices[deviceSelect.selectedIndex];
-  if (!dev || session) return;
-  try {
-    log(`正在打开 ${label(dev)} …`);
-    await dev.open();
-    if (!dev.configuration && dev.configurations.length > 0) {
-      await dev.selectConfiguration(dev.configurations[0].configurationValue);
-    }
-    const iface = findDapInterface(dev);
-    if (!iface) throw new Error('未找到带 bulk 输入/输出端点的接口 (需要 CMSIS-DAP v2 固件)');
-    await dev.claimInterface(iface.interfaceNumber);
-    session = { device: dev, ...iface };
-    log(`已打开: 接口 ${iface.interfaceNumber}, OUT ep${iface.outEp}, IN ep${iface.inEp} (包长 ${iface.inSize})`);
-  } catch (e) {
-    try {
-      await dev.close();
-    } catch {
-      /* 忽略 */
-    }
-    session = null;
-    log(`! 打开失败: ${err(e)} (Windows 下 claim 失败通常是缺少 WinUSB 驱动, 见 README)`);
-  }
+btn.close.onclick = () => {
+  if (!openState) return;
+  const d = devices[selectedIdx];
+  openState = false;
+  log(`[演示] 关闭 ${d ? devLabel(d) : ''}`);
   updateUi();
-}
+};
 
-async function closeSession(): Promise<void> {
-  if (!session) return;
-  const dev = session.device;
-  session = null;
-  try {
-    await dev.close();
-    log('设备已关闭');
-  } catch (e) {
-    log(`! 关闭出错: ${err(e)}`);
-  }
-  updateUi();
-}
+btn.automatch.onclick = () => {
+  log(`[未实现] 自动匹配: 降至低速读取 JEDEC ID, 在型号库 (${FLASH_DB.length} 条) 中匹配并调整时钟`);
+};
 
-// ---------- 收发 ----------
+btn.fileOpen.onclick = () => log('[未实现] 打开文件 → 载入数据缓冲区');
+btn.save.onclick = () => log('[未实现] 保存数据缓冲区 → 文件');
+btn.read.onclick = () => log('[未实现] 读取: JTAG_seq 按 SPI 时序读 FLASH, 按包长自动分包');
+btn.erase.onclick = () => log('[未实现] 擦除 (Chip Erase)');
+btn.blank.onclick = () => log('[未实现] 查空: 检查缓冲区是否全 0xFF');
+btn.write.onclick = () => log('[未实现] 写入: Page Program 按页编程');
+btn.verify.onclick = () => log('[未实现] 校验: 回读与缓冲区比对');
 
-async function doSend(): Promise<void> {
-  if (!session) return log('! 未打开设备');
-  let bytes: Uint8Array<ArrayBuffer>;
-  try {
-    bytes = parseHex(hexInput.value);
-  } catch (e) {
-    return log(`! ${err(e)}`);
-  }
-  try {
-    await session.device.transferOut(session.outEp, bytes);
-    log(`TX> ${hex(bytes)}`);
-    if (autoRecv.checked) await doRecv();
-  } catch (e) {
-    log(`! 发送失败: ${err(e)}`);
-  }
-}
+// ---------- 界面状态 ----------
 
-async function doRecv(): Promise<void> {
-  if (!session) return log('! 未打开设备');
-  try {
-    const r = await session.device.transferIn(session.inEp, session.inSize);
-    if (r.status !== 'ok') return log(`! 接收异常: ${r.status}`);
-    if (!r.data) return log('RX< (无数据)');
-    const bytes = new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength);
-    log(bytes.length === 0 ? 'RX< (空包)' : `RX< ${hex(bytes)}`);
-  } catch (e) {
-    log(`! 接收失败: ${err(e)}`);
-  }
+function updateUi(): void {
+  const has = devices.length > 0 && selectedIdx >= 0;
+  btn.open.disabled = openState || !has;
+  btn.close.disabled = !openState;
+  for (const b of NEEDS_OPEN) b.disabled = !openState;
+  statusDot.className = openState ? 'dot ok' : 'dot err';
+  const d = devices[selectedIdx];
+  statusText.textContent = openState && d ? `已打开: ${devLabel(d)}` : '未打开设备';
 }
 
 // ---------- 事件绑定 ----------
@@ -239,43 +188,68 @@ if (!('usb' in navigator)) {
   throw new Error('WebUSB not supported');
 }
 
-buttons.addDap.onclick = () => addDevice(KNOWN_DEVICES.map((k) => ({ vendorId: k.vid, productId: k.pid })));
-buttons.addAny.onclick = () => addDevice([]);
-buttons.refresh.onclick = () => refreshDeviceList();
-buttons.open.onclick = openSelected;
-buttons.close.onclick = closeSession;
-buttons.send.onclick = doSend;
-buttons.recv.onclick = doRecv;
-buttons.clearLog.onclick = () => {
+btn.pair.onclick = async () => {
+  try {
+    const d = await navigator.usb.requestDevice({ filters: [] });
+    log(`已配对: ${devLabel(d)}`);
+    await refreshDevices();
+    const idx = devices.findIndex(
+      (x) => x === d || (x.vendorId === d.vendorId && x.productId === d.productId && x.serialNumber === d.serialNumber),
+    );
+    if (idx >= 0) {
+      selectedIdx = idx;
+      renderDevices();
+      updateUi();
+    }
+  } catch (e) {
+    if ((e as DOMException)?.name !== 'NotFoundError') log(`! 配对失败: ${err(e)}`);
+  }
+};
+
+btn.refresh.onclick = () => refreshDevices();
+btn.clearLog.onclick = () => {
   logEl.textContent = '';
 };
-hexInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') doSend();
-});
-deviceSelect.addEventListener('change', updateUi);
 
 navigator.usb.ondisconnect = (e: USBConnectionEvent) => {
-  if (session && e.device === session.device) {
-    session = null;
-    log('! 当前设备已被拔出');
-  }
-  refreshDeviceList();
+  log(`设备移除: ${devLabel(e.device)}`);
+  if (openState && devices[selectedIdx] === e.device) openState = false;
+  void refreshDevices();
 };
-navigator.usb.onconnect = () => {
-  log('检测到 USB 设备接入');
-  refreshDeviceList();
+navigator.usb.onconnect = (e: USBConnectionEvent) => {
+  log(`设备接入: ${devLabel(e.device)}`);
+  void refreshDevices();
 };
 
-for (const [name, data] of PRESETS) {
-  const b = document.createElement('button');
-  b.textContent = name;
-  b.className = 'preset';
-  b.title = data;
-  b.onclick = () => {
-    hexInput.value = data;
-  };
-  presetEl.appendChild(b);
+// ---------- 初始化 ----------
+
+for (const [label, kHz] of [
+  ['100 kHz', '100'],
+  ['500 kHz', '500'],
+  ['1 MHz', '1000'],
+  ['2 MHz', '2000'],
+  ['5 MHz', '5000'],
+  ['10 MHz', '10000'],
+  ['20 MHz', '20000'],
+] as const) {
+  const o = document.createElement('option');
+  o.value = kHz;
+  o.textContent = label;
+  if (kHz === '10000') o.selected = true;
+  clkSel.appendChild(o);
 }
 
-log('就绪. 请先"添加设备"并授权, 再选择并打开 (需 Chrome/Edge 浏览器).');
-void refreshDeviceList();
+{
+  const o = document.createElement('option');
+  o.textContent = '（请选择 FLASH 型号）';
+  flashSel.appendChild(o);
+}
+for (const f of FLASH_DB) {
+  const o = document.createElement('option');
+  o.textContent = `${f.vendor} ${f.model} · ${fmtSize(f.sizeBytes)} · JEDEC ${f.jedecId.toString(16).padStart(6, '0').toUpperCase()}`;
+  flashSel.appendChild(o);
+}
+
+log('CMSIS-DAP Flash Tool 就绪 (界面原型, 操作函数为占位).');
+renderHex(BUFFER);
+void refreshDevices();

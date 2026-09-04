@@ -3,71 +3,135 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>CMSIS-DAP WebUSB 工具</title>
+<title>CMSIS-DAP Flash Tool</title>
 <style>
   * { box-sizing: border-box; }
-  html { color-scheme: light; background: #fff; }
+  html { color-scheme: light; background: #e6e7e4; }
   body {
     font: 14px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
-    color: #24292f; max-width: 880px; margin: 20px auto 40px; padding: 0 16px;
+    color: #1c1c1c; max-width: 920px; margin: 0 auto; padding: 0 16px 40px;
   }
-  h1 { font-size: 18px; margin: 0 0 14px; }
-  h2 { font-size: 13px; margin: 0 0 8px; color: #57606a; }
-  section { border: 1px solid #d0d7de; border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
-  select { width: 100%; padding: 4px; font: inherit; }
+  .bar {
+    background: #2b2d2e; color: #f0f0ee; margin: 0 -16px 16px;
+    padding: 9px 20px; font-weight: 600; letter-spacing: .1em;
+  }
+  section { background: #fff; border: 1px solid #82827e; margin-bottom: 14px; padding: 10px 14px 12px; }
+  h2 {
+    font-size: 12px; font-weight: 600; letter-spacing: .18em; color: #55554f;
+    margin: 0 -14px 10px; padding: 0 14px 6px; border-bottom: 1px solid #d8d8d2;
+  }
   button {
-    padding: 4px 12px; margin: 2px 6px 2px 0; font: inherit; cursor: pointer;
-    border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa;
+    padding: 4px 14px; font: inherit; cursor: pointer; border-radius: 2px;
+    border: 1px solid #6b6b67; background: #f4f4f1; color: #1c1c1c;
   }
-  button:hover:not(:disabled) { background: #eef1f4; }
-  button:disabled { opacity: .4; cursor: default; }
-  button.preset { padding: 1px 8px; font-size: 12px; }
-  #status { margin-top: 8px; color: #57606a; }
-  #status.ok { color: #1a7f37; }
-  #hex-input { width: 340px; padding: 4px 6px; font: 13px/1.4 Consolas, monospace; }
-  .hint { color: #57606a; }
+  button:hover:not(:disabled) { background: #e3e5e1; }
+  button:active:not(:disabled) { background: #d6d8d3; }
+  button:disabled { opacity: .35; cursor: default; }
+  select { font: inherit; padding: 3px 4px; border: 1px solid #6b6b67; background: #fff; border-radius: 2px; }
+
+  /* 设备管理 */
+  #device-list {
+    border: 1px solid #82827e; height: 132px; overflow-y: auto; background: #fafaf8;
+  }
+  .dev-empty { color: #77776f; padding: 8px 10px; }
+  .dev-item {
+    display: flex; align-items: center; gap: 10px; padding: 5px 10px;
+    border-bottom: 1px solid #ecece7; cursor: pointer; font-size: 13px;
+  }
+  .dev-item:hover { background: #eff1ed; }
+  .dev-item.selected { background: #e2e7e0; outline: 1px solid #4c4c48; outline-offset: -1px; }
+  .dev-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dev-id { font: 12.5px Consolas, monospace; color: #55554f; }
+  .cap {
+    font-size: 11px; color: #77776f; border: 1px solid #a8a8a2;
+    padding: 0 5px; line-height: 17px; border-radius: 2px;
+  }
+  .btnrow { margin-top: 10px; }
+  .statusline { margin-top: 9px; }
+  .dot {
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    margin-right: 8px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.25);
+  }
+  .dot.ok { background: #1f8a3c; }
+  .dot.err { background: #c23a2b; }
+  #status-text { color: #44443f; }
+
+  /* FLASH 操作 */
+  .fieldrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .fieldrow label { color: #44443f; }
+  #flash-sel { flex: 1; min-width: 260px; max-width: 480px; }
+
+  .bufrow { display: flex; gap: 10px; margin-top: 10px; }
+  .bufleft { flex: 1; min-width: 0; }
+  #hex-view { border: 1px solid #82827e; height: 320px; overflow: auto; background: #fafaf8; }
+  #buf-info { color: #77776f; font-size: 12px; margin-top: 4px; }
+  table.hex { border-collapse: collapse; font: 12.5px/1.5 Consolas, monospace; }
+  .hex th {
+    position: sticky; top: 0; z-index: 1; background: #e4e5e0; color: #44443f;
+    border: 1px solid #b9b9b3; padding: 1px 8px; font-weight: 600;
+  }
+  .hex td { border: 1px solid #e4e5e0; padding: 0 8px; }
+  .hex td:first-child { background: #efefe9; color: #77776f; }
+  .opcol { display: flex; flex-direction: column; gap: 6px; width: 96px; }
+  .opcol button { width: 100%; }
+
+  /* 日志 */
+  .loghead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
   #log {
-    margin: 8px 0 0; padding: 8px 10px; min-height: 180px; max-height: 340px; overflow: auto;
-    background: #1e1e2e; color: #cdd6f4; border-radius: 6px; font: 12px/1.6 Consolas, monospace;
-    white-space: pre-wrap; word-break: break-all;
+    margin: 0; padding: 8px 10px; height: 150px; overflow-y: auto;
+    background: #232628; color: #c9cdc4; border-radius: 2px;
+    font: 12px/1.6 Consolas, monospace; white-space: pre-wrap; word-break: break-all;
   }
-  footer { color: #8b949e; font-size: 12px; }
 </style>
 </head>
 <body>
-<h1>CMSIS-DAP WebUSB 工具</h1>
+<div class="bar">CMSIS-DAP Flash Tool</div>
 
 <section>
-  <h2>设备</h2>
-  <select id="device-select" size="5"></select>
-  <div style="margin-top:8px">
-    <button id="btn-add-dap">添加 CMSIS-DAP 设备…</button>
-    <button id="btn-add-any">添加任意 USB 设备…</button>
-    <button id="btn-refresh">刷新列表</button>
+  <h2>设备管理</h2>
+  <div id="device-list"></div>
+  <div class="btnrow">
+    <button id="btn-pair">配对</button>
+    <button id="btn-refresh">刷新</button>
     <button id="btn-open" disabled>打开</button>
     <button id="btn-close" disabled>关闭</button>
   </div>
-  <div id="status">未打开设备</div>
+  <div class="statusline">
+    <span id="status-dot" class="dot err"></span><span id="status-text">未打开设备</span>
+  </div>
 </section>
 
 <section>
-  <h2>数据包</h2>
-  <input id="hex-input" placeholder="hex 字节, 如: 00 F0" spellcheck="false" />
-  <button id="btn-send" disabled>发送</button>
-  <button id="btn-recv" disabled>接收</button>
-  <label class="hint"><input type="checkbox" id="auto-recv" checked /> 发送后自动读取响应</label>
-  <div id="presets" style="margin-top:6px"></div>
+  <h2>FLASH 操作</h2>
+  <div class="fieldrow">
+    <label>时钟速度 <select id="clk-sel"></select></label>
+    <label>FLASH 型号 <select id="flash-sel"></select></label>
+    <button id="btn-automatch" disabled>自动匹配</button>
+  </div>
+  <div class="bufrow">
+    <div class="bufleft">
+      <div id="hex-view"></div>
+      <div id="buf-info"></div>
+    </div>
+    <div class="opcol">
+      <button id="btn-file-open">打开</button>
+      <button id="btn-save">保存</button>
+      <button id="btn-read" disabled>读取</button>
+      <button id="btn-erase" disabled>擦除</button>
+      <button id="btn-blank" disabled>查空</button>
+      <button id="btn-write" disabled>写入</button>
+      <button id="btn-verify" disabled>校验</button>
+    </div>
+  </div>
 </section>
 
 <section>
-  <h2>日志 <button id="btn-clear-log" class="preset" style="float:right;margin:0">清空</button></h2>
+  <div class="loghead">
+    <h2 style="margin:0;border:0;padding:0">日志</h2>
+    <button id="btn-clear-log" style="padding:0 8px;font-size:12px">清空</button>
+  </div>
   <pre id="log"></pre>
 </section>
-
-<footer>
-  提示: 需要 Chrome/Edge 浏览器 (页面需来自 HTTPS 或 localhost); 仅支持 CMSIS-DAP v2 (bulk 传输),
-  v1 (HID) 不支持; Windows 下若打开失败, 需为设备绑定 WinUSB 驱动 (详见 README)。
-</footer>
 
 <script type="module" src="out/main.js"></script>
 </body>
