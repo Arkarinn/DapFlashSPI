@@ -482,7 +482,11 @@ btn.pair.onclick = async () => {
       updateUi();
     }
   } catch (e) {
-    if ((e as DOMException)?.name !== 'NotFoundError') log(`! 配对失败: ${err(e)}`);
+    if ((e as DOMException)?.name === 'NotFoundError') {
+      log('! 未选择设备 (若未弹出选择框: 内嵌/Edge 以外浏览器可能不支持 USB 授权, 请改用 Chrome 或 Edge)');
+      return;
+    }
+    log(`! 配对失败: ${err(e)}`);
   }
 };
 
@@ -554,4 +558,6 @@ flashDd.setOptions([
 
 log('CMSIS-DAP Flash Tool 就绪.');
 updateBufInfo();
-void refreshDevices();
+void refreshDevices().then(() => {
+  if (devices.length === 0) log('提示: 尚无已授权设备, 请点击"配对"并在浏览器弹窗中选择设备 (推荐 Chrome / Edge).');
+});
