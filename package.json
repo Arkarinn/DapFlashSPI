@@ -1,0 +1,16 @@
+{
+  "name": "webusb-dap-tool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CMSIS-DAP WebUSB 调试小工具: 搜索/打开设备, bulk 收发数据包",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "serve": "node server.mjs",
+    "start": "tsc && node server.mjs"
+  },
+  "devDependencies": {
+    "@types/w3c-web-usb": "^1.0.6",
+    "typescript": "^5.9.2"
+  }
+}

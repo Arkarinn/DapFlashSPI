@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CMSIS-DAP WebUSB 工具</title>
+<style>
+  * { box-sizing: border-box; }
+  html { color-scheme: light; background: #fff; }
+  body {
+    font: 14px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: #24292f; max-width: 880px; margin: 20px auto 40px; padding: 0 16px;
+  }
+  h1 { font-size: 18px; margin: 0 0 14px; }
+  h2 { font-size: 13px; margin: 0 0 8px; color: #57606a; }
+  section { border: 1px solid #d0d7de; border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  select { width: 100%; padding: 4px; font: inherit; }
+  button {
+    padding: 4px 12px; margin: 2px 6px 2px 0; font: inherit; cursor: pointer;
+    border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa;
+  }
+  button:hover:not(:disabled) { background: #eef1f4; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.preset { padding: 1px 8px; font-size: 12px; }
+  #status { margin-top: 8px; color: #57606a; }
+  #status.ok { color: #1a7f37; }
+  #hex-input { width: 340px; padding: 4px 6px; font: 13px/1.4 Consolas, monospace; }
+  .hint { color: #57606a; }
+  #log {
+    margin: 8px 0 0; padding: 8px 10px; min-height: 180px; max-height: 340px; overflow: auto;
+    background: #1e1e2e; color: #cdd6f4; border-radius: 6px; font: 12px/1.6 Consolas, monospace;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  footer { color: #8b949e; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>CMSIS-DAP WebUSB 工具</h1>
+
+<section>
+  <h2>设备</h2>
+  <select id="device-select" size="5"></select>
+  <div style="margin-top:8px">
+    <button id="btn-add-dap">添加 CMSIS-DAP 设备…</button>
+    <button id="btn-add-any">添加任意 USB 设备…</button>
+    <button id="btn-refresh">刷新列表</button>
+    <button id="btn-open" disabled>打开</button>
+    <button id="btn-close" disabled>关闭</button>
+  </div>
+  <div id="status">未打开设备</div>
+</section>
+
+<section>
+  <h2>数据包</h2>
+  <input id="hex-input" placeholder="hex 字节, 如: 00 F0" spellcheck="false" />
+  <button id="btn-send" disabled>发送</button>
+  <button id="btn-recv" disabled>接收</button>
+  <label class="hint"><input type="checkbox" id="auto-recv" checked /> 发送后自动读取响应</label>
+  <div id="presets" style="margin-top:6px"></div>
+</section>
+
+<section>
+  <h2>日志 <button id="btn-clear-log" class="preset" style="float:right;margin:0">清空</button></h2>
+  <pre id="log"></pre>
+</section>
+
+<footer>
+  提示: 需要 Chrome/Edge 浏览器 (页面需来自 HTTPS 或 localhost); 仅支持 CMSIS-DAP v2 (bulk 传输),
+  v1 (HID) 不支持; Windows 下若打开失败, 需为设备绑定 WinUSB 驱动 (详见 README)。
+</footer>
+
+<script type="module" src="out/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+node_modules/
+out/
+site/
+.vscode/
+.DS_Store
+Thumbs.db

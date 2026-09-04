@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2020",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["w3c-web-usb"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noEmitOnError": true,
+    "outDir": "out",
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}
