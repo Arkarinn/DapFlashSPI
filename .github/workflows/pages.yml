@@ -40,9 +40,9 @@ jobs:
         run: |
           npm ci
           npm run build
-          mkdir -p site/out
+          mkdir -p site
           cp index.html site/
-          cp out/main.js site/out/
+          cp -r out site/out
           touch site/.nojekyll
 
       - uses: actions/upload-pages-artifact@v3
