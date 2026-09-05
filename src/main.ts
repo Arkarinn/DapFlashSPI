@@ -2,7 +2,7 @@
 // 设备管理 (WebUSB) + FLASH 操作 (JTAG 模拟 SPI): 读取/擦除/查空/写入/校验/自动匹配
 import { FLASH_DB, FlashInfo } from './flashdb.js';
 import { Dropdown } from './dropdown.js';
-import { CmsisDap, DapError, sleep } from './dap.js';
+import { CmsisDap, DAP_INFO, DapError, sleep } from './dap.js';
 import { SpiFlash } from './spiflash.js';
 import { HexView } from './hexview.js';
 
@@ -50,6 +50,7 @@ let buffer: Uint8Array<ArrayBuffer> | null = null;
 let busy = false;
 let abort = false;
 const capsMap = new Map<USBDevice, { jtag?: boolean; swd?: boolean }>();
+const uidMap = new Map<USBDevice, string>(); // DAP_Info 序列号 (无则 USB 序列号)
 
 // ---------- 工具函数 ----------
 
@@ -154,11 +155,19 @@ function renderDevices(): void {
     name.className = 'dev-name';
     name.textContent = d.productName || '未命名设备';
 
+    const uid = uidMap.get(d);
+    const uidEl = document.createElement('span');
+    uidEl.className = 'dev-uid';
+    uidEl.title = uid ? `UID: ${uid}` : '打开设备后读取序列号';
+    uidEl.textContent = uid ?? '';
+
     const id = document.createElement('span');
     id.className = 'dev-id';
     id.textContent = `${hex16(d.vendorId)}:${hex16(d.productId)}`;
 
-    row.append(id, name);
+    const spring = document.createElement('span');
+    spring.className = 'dev-spring';
+    row.append(id, name, uidEl, spring);
     const caps = capsMap.get(d);
     for (const [nm, ok] of [
       ['JTAG', caps?.jtag],
@@ -193,14 +202,34 @@ async function opOpen(): Promise<void> {
   log(`正在打开 ${devLabel(dev)} …`);
   try {
     dap = await CmsisDap.open(dev, (s) => log(`  · ${s}`));
+    log('  · 查询能力位 …');
+    const caps = await dap.getCaps();
+    if (caps) {
+      capsMap.set(dev, caps);
+      renderDevices();
+      if (!caps.jtag) throw new DapError('该设备不支持 JTAG (SPI 需要 JTAG 模式)');
+    } else {
+      log('  · 固件未实现能力位查询, 继续');
+    }
+    try {
+      // 序列号: 优先 DAP_Info (DAPLink 返回 MCU 唯一 ID), 回退 USB 序列号
+      const uid = (await dap.infoStr(DAP_INFO.serNum)) ?? dev.serialNumber ?? null;
+      if (uid) {
+        uidMap.set(dev, uid);
+        log(`  · UID: ${uid}`);
+        renderDevices();
+      }
+    } catch {
+      log('  · 序列号读取失败, 继续');
+    }
     log('  · 设置 SWJ 时钟 …');
     await dap.swjClock(Number(clkDd.option?.value ?? 10000) * 1000);
     log('  · 连接 JTAG …');
     await dap.connectJtag();
-    // 不主动查询能力位 (DAP_Info 0xF0): 个别固件会因此复位;
-    // JTAG 支持以连接成功为准, SWD 保持未知
-    capsMap.set(dev, { jtag: true });
-    renderDevices();
+    if (!caps) {
+      capsMap.set(dev, { jtag: true }); // 连接成功至少说明支持 JTAG
+      renderDevices();
+    }
     try {
       await dap.hostStatus(true); // LED 指示, 纯装饰, 失败不影响
     } catch {
@@ -233,6 +262,7 @@ async function opClose(): Promise<void> {
   if (!dap) throw new Error('设备未打开');
   const dev = dap.device;
   try {
+    if (spi) await syncAddrMode(0); // 恢复 3 字节地址模式, 避免影响其他工具
     await dap.disconnect();
     await dap.hostStatus(false);
     await dev.close();
@@ -302,6 +332,7 @@ async function opAutomatch(): Promise<void> {
 
 async function opRead(): Promise<void> {
   const { spi: s, model } = requireFlash();
+  await syncAddrMode(model.sizeBytes);
   allocBuffer(model.sizeBytes, `读取 ${model.model}`);
   const buf = buffer!;
   const prog = makeProgress(buf.length, '读取');
@@ -317,13 +348,19 @@ async function opRead(): Promise<void> {
   log(`读取完成: ${fmtSize(buf.length)}`);
 }
 
+// 按容量同步 3B/4B 地址模式并记录日志
+async function syncAddrMode(sizeBytes: number): Promise<void> {
+  const r = await requireSpi().syncAddressMode(sizeBytes);
+  if (r !== null) log(r ? '进入 4 字节地址模式 (0xB7)' : '恢复 3 字节地址模式 (0xE9)');
+}
+
 async function opErase(): Promise<void> {
   const { spi: s, model } = requireFlash();
   log(`全片擦除 ${model.model} (最长可至数分钟, Esc 可停止轮询)…`);
   await s.chipEraseStart();
   const t0 = performance.now();
   let tick = 0;
-  for (;;) {
+  for (; ;) {
     checkAbort();
     if ((await s.readStatus() & 1) === 0) break;
     if (performance.now() - t0 > CHIP_ERASE_TIMEOUT_MS) throw new DapError('擦除超时 (WIP 仍为忙)');
@@ -335,6 +372,7 @@ async function opErase(): Promise<void> {
 
 async function opBlank(): Promise<void> {
   const { spi: s, model } = requireFlash();
+  await syncAddrMode(model.sizeBytes);
   const prog = makeProgress(model.sizeBytes, '查空');
   let addr = 0;
   let bad = -1;
@@ -363,6 +401,7 @@ async function opBlank(): Promise<void> {
 
 async function opWrite(): Promise<void> {
   const { spi: s, model } = requireFlash();
+  await syncAddrMode(model.sizeBytes);
   const page = model.page;
   const buf = buffer!;
   const pages = Math.ceil(buf.length / page);
@@ -395,7 +434,8 @@ async function opWrite(): Promise<void> {
 }
 
 async function opVerify(): Promise<void> {
-  const { spi: s } = requireFlash();
+  const { spi: s, model } = requireFlash();
+  await syncAddrMode(model.sizeBytes);
   const buf = buffer!;
   const prog = makeProgress(buf.length, '校验');
   const diffs: number[] = [];
@@ -605,10 +645,10 @@ clkDd.setOptions(
 );
 
 flashDd.setOptions([
-  { value: '', label: '（请选择 FLASH 型号）' },
+  { value: '', label: '（未选择）' },
   ...FLASH_DB.map((f, i) => ({
     value: String(i),
-    label: `${f.vendor} ${f.model} · ${fmtSize(f.sizeBytes)} · JEDEC ${f.jedecId.toString(16).padStart(6, '0').toUpperCase()}`,
+    label: `${f.vendor} ${f.model} · ${fmtSize(f.sizeBytes)}`,
   })),
 ]);
 

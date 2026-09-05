@@ -14,7 +14,20 @@ export const DAP_CMD = {
   jtagSequence: 0x14,
 } as const;
 
-export class DapError extends Error {}
+// DAP_Info 的信息 ID (见 Include/DAP.h "DAP ID"); UID/序列号 = serNum
+export const DAP_INFO = {
+  vendor: 0x01,
+  product: 0x02,
+  serNum: 0x03,
+  fwVer: 0x04,
+  deviceVendor: 0x05,
+  deviceName: 0x06,
+  capabilities: 0xf0,
+  packetCount: 0xfe,
+  packetSize: 0xff,
+} as const;
+
+export class DapError extends Error { }
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -74,7 +87,7 @@ export class CmsisDap {
           await dev.claimInterface(i.interfaceNumber);
           log?.(`接口 ${i.interfaceNumber} 已占用 (OUT ep${i.outEp} / IN ep${i.inEp})`);
           const d = new CmsisDap(dev, i);
-          const ps = await d.info(0xff, 1000); // DAP_Info: 包长 (探测)
+          const ps = await d.info(DAP_INFO.packetSize, 1000); // 探测
           if (ps !== null && ps >= 64) d.pktSize = ps;
           log?.(`DAP_Info 应答正常, 包长 ${d.pktSize}B`);
           return d;
@@ -147,16 +160,26 @@ export class CmsisDap {
 
   // DAP_Info: 数值型信息 (包长/包数/能力位), 不支持时返回 null
   async info(id: number, timeoutMs?: number): Promise<number | null> {
-    const r = await this.cmd(Uint8Array.of(0x00, id), timeoutMs);
+    const r = await this.cmd(Uint8Array.of(DAP_CMD.info, id), timeoutMs);
     if (r.length < 2 || r[0] === 0) return null;
     let v = 0;
     for (let i = 1; i <= Math.min(r[0], 4); i++) v |= r[i]! << (8 * (i - 1));
     return v;
   }
 
-  // 能力位 (0xF0): bit0=SWD, bit1=JTAG
+  // DAP_Info: 字符串型信息 (序列号/固件版本等), 不支持或为空时返回 null
+  async infoStr(id: number, timeoutMs?: number): Promise<string | null> {
+    const r = await this.cmd(Uint8Array.of(DAP_CMD.info, id), timeoutMs);
+    if (r.length < 2 || r[0] === 0) return null;
+    let s = '';
+    for (let i = 1; i <= r[0] && i < r.length; i++) s += String.fromCharCode(r[i]!);
+    s = s.trim();
+    return s || null;
+  }
+
+  // 能力位: bit0=SWD, bit1=JTAG
   async getCaps(): Promise<{ swd: boolean; jtag: boolean } | null> {
-    const v = await this.info(0xf0);
+    const v = await this.info(DAP_INFO.capabilities);
     if (v === null) return null;
     return { swd: !!(v & 1), jtag: !!(v & 2) };
   }

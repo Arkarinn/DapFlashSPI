@@ -1,167 +1,443 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>CMSIS-DAP Flash Tool</title>
-<style>
-  * { box-sizing: border-box; }
-  html { color-scheme: light; background: #e6e7e4; }
-  body {
-    font: 14px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
-    color: #1c1c1c; max-width: 920px; margin: 0 auto; padding: 0 16px 40px;
-  }
-  .bar {
-    background: #2b2d2e; color: #f0f0ee; margin: 0 -16px 16px;
-    padding: 9px 20px; font-weight: 600; letter-spacing: .1em;
-  }
-  section { background: #fff; border: 1px solid #82827e; margin-bottom: 14px; padding: 10px 14px 12px; }
-  h2 {
-    font-size: 12px; font-weight: 600; letter-spacing: .18em; color: #55554f;
-    margin: 0 -14px 10px; padding: 0 14px 6px; border-bottom: 1px solid #d8d8d2;
-  }
-  button {
-    padding: 4px 14px; font: inherit; cursor: pointer; border-radius: 2px;
-    border: 1px solid #6b6b67; background: #f4f4f1; color: #1c1c1c;
-  }
-  button:hover:not(:disabled) { background: #e3e5e1; }
-  button:active:not(:disabled) { background: #d6d8d3; }
-  button:disabled { opacity: .35; cursor: default; }
-  button.dim { opacity: .4; cursor: default; }
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CMSIS-DAP Flash Tool</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
 
-  /* 自绘下拉框 */
-  .dd { position: relative; display: inline-block; }
-  .dd-btn {
-    display: flex; align-items: center; gap: 6px; min-height: 24px;
-    padding: 2px 6px; text-align: left; border-radius: 2px;
-  }
-  .dd-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-  .dd-caret { color: #77776f; font-size: 10px; }
-  .dd-menu {
-    display: none; position: absolute; top: calc(100% + 2px); left: 0; z-index: 30;
-    min-width: 100%; width: max-content; max-width: 520px; max-height: 240px; overflow-y: auto;
-    background: #fff; border: 1px solid #6b6b67; box-shadow: 2px 2px 0 rgba(0,0,0,.14);
-  }
-  .dd.open .dd-menu { display: block; }
-  .dd-filter {
-    position: sticky; top: 0; z-index: 1; display: block; width: 100%;
-    padding: 4px 8px; font: 13px/1.4 inherit; border: 0;
-    border-bottom: 1px solid #b9b9b3; outline: none; background: #fff;
-  }
-  .dd-item { padding: 4px 10px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
-  .dd-item:hover { background: #eff1ed; }
-  .dd-item.sel { background: #e2e7e0; font-weight: 600; }
-  .dd.disabled .dd-btn { opacity: .35; cursor: default; }
+    html {
+      color-scheme: light;
+      background: #e6e7e4;
+    }
 
-  /* 设备管理 */
-  #device-list {
-    border: 1px solid #82827e; height: 132px; overflow-y: auto; background: #fafaf8;
-  }
-  .dev-empty { color: #77776f; padding: 8px 10px; }
-  .dev-item {
-    display: flex; align-items: center; gap: 10px; padding: 5px 10px;
-    border-bottom: 1px solid #ecece7; cursor: pointer; font-size: 13px;
-  }
-  .dev-item:hover { background: #eff1ed; }
-  .dev-item.selected { background: #e2e7e0; outline: 1px solid #4c4c48; outline-offset: -1px; }
-  .dev-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dev-id { font: 12.5px Consolas, monospace; color: #55554f; }
-  .cap {
-    font-size: 11px; color: #77776f; border: 1px solid #a8a8a2;
-    padding: 0 5px; line-height: 17px; border-radius: 2px;
-  }
-  .cap.no { color: #a14833; border-color: #c9a09a; }
-  .btnrow { margin-top: 10px; }
-  .statusline { margin-top: 9px; }
-  .dot {
-    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-    margin-right: 8px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.25);
-  }
-  .dot.ok { background: #1f8a3c; }
-  .dot.warn { background: #d99a1e; }
-  .dot.err { background: #c23a2b; }
-  #status-text { color: #44443f; }
+    body {
+      font: 14px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: #1c1c1c;
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 0 16px 40px;
+    }
 
-  /* FLASH 操作 */
-  .fieldrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .fieldrow .fld { color: #44443f; }
-  #clk-dd .dd-btn { width: 86px; }
-  #flash-dd { flex: 1; min-width: 220px; max-width: 470px; }
-  #flash-dd .dd { width: 100%; }
+    .bar {
+      background: #2b2d2e;
+      color: #f0f0ee;
+      margin: 0 -16px 16px;
+      padding: 9px 20px;
+      font-weight: 600;
+      letter-spacing: .1em;
+    }
 
-  .bufrow { display: flex; gap: 10px; margin-top: 10px; }
-  .bufleft { flex: 1; min-width: 0; }
-  #hex-view { border: 1px solid #82827e; height: 320px; overflow: auto; background: #fafaf8; }
-  #buf-info { color: #77776f; font-size: 12px; margin-top: 4px; }
-  table.hex { border-collapse: collapse; font: 12.5px/1.5 Consolas, monospace; }
-  .hex th {
-    position: sticky; top: 0; z-index: 1; background: #e4e5e0; color: #44443f;
-    border: 1px solid #b9b9b3; padding: 1px 6px; font-weight: 600;
-  }
-  .hex td { border: 1px solid #e4e5e0; padding: 0 6px; }
-  .hex td:first-child { background: #efefe9; color: #77776f; }
-  .opcol { display: flex; flex-direction: column; gap: 6px; width: 96px; }
-  .opcol button { width: 100%; }
+    section {
+      background: #fff;
+      border: 1px solid #82827e;
+      margin-bottom: 14px;
+      padding: 10px 14px 12px;
+    }
 
-  /* 日志 */
-  .loghead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-  #log {
-    margin: 0; padding: 8px 10px; height: 150px; overflow-y: auto;
-    background: #232628; color: #c9cdc4; border-radius: 2px;
-    font: 12px/1.6 Consolas, monospace; white-space: pre-wrap; word-break: break-all;
-  }
-</style>
+    h2 {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: .18em;
+      color: #55554f;
+      margin: 0 -14px 10px;
+      padding: 0 14px 6px;
+      border-bottom: 1px solid #d8d8d2;
+    }
+
+    button {
+      padding: 4px 14px;
+      font: inherit;
+      cursor: pointer;
+      border-radius: 2px;
+      border: 1px solid #6b6b67;
+      background: #f4f4f1;
+      color: #1c1c1c;
+    }
+
+    button:hover:not(:disabled) {
+      background: #e3e5e1;
+    }
+
+    button:active:not(:disabled) {
+      background: #d6d8d3;
+    }
+
+    button:disabled {
+      opacity: .35;
+      cursor: default;
+    }
+
+    button.dim {
+      opacity: .4;
+      cursor: default;
+    }
+
+    /* 自绘下拉框 */
+    .dd {
+      position: relative;
+      display: inline-block;
+    }
+
+    .dd-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%; /* 原生 button 不会自动撑满容器, 需显式指定 */
+      min-height: 24px;
+      padding: 2px 6px;
+      text-align: left;
+      border-radius: 2px;
+    }
+
+    .dd-label {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .dd-caret {
+      color: #77776f;
+      font-size: 10px;
+    }
+
+    .dd-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 2px);
+      left: 0;
+      z-index: 30;
+      min-width: 100%;
+      width: max-content;
+      max-width: 520px;
+      max-height: 240px;
+      overflow-y: auto;
+      background: #fff;
+      border: 1px solid #6b6b67;
+      box-shadow: 2px 2px 0 rgba(0, 0, 0, .14);
+    }
+
+    .dd.open .dd-menu {
+      display: block;
+    }
+
+    .dd-filter {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: block;
+      width: 100%;
+      padding: 4px 8px;
+      font: 13px/1.4 inherit;
+      border: 0;
+      border-bottom: 1px solid #b9b9b3;
+      outline: none;
+      background: #fff;
+    }
+
+    .dd-item {
+      padding: 4px 10px;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+
+    .dd-item:hover {
+      background: #eff1ed;
+    }
+
+    .dd-item.sel {
+      background: #e2e7e0;
+      font-weight: 600;
+    }
+
+    .dd.disabled .dd-btn {
+      opacity: .35;
+      cursor: default;
+    }
+
+    /* 设备管理 */
+    #device-list {
+      border: 1px solid #82827e;
+      height: 132px;
+      overflow-y: auto;
+      background: #fafaf8;
+    }
+
+    .dev-empty {
+      color: #77776f;
+      padding: 8px 10px;
+    }
+
+    .dev-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 10px;
+      border-bottom: 1px solid #ecece7;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .dev-item:hover {
+      background: #eff1ed;
+    }
+
+    .dev-item.selected {
+      background: #e2e7e0;
+      outline: 1px solid #4c4c48;
+      outline-offset: -1px;
+    }
+
+    .dev-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dev-uid {
+      font: 12.5px Consolas, monospace;
+      color: #77776f;
+      max-width: 170px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dev-spring {
+      flex: 1;
+    }
+
+    .dev-id {
+      font: 12.5px Consolas, monospace;
+      color: #55554f;
+    }
+
+    .cap {
+      font-size: 11px;
+      color: #77776f;
+      border: 1px solid #a8a8a2;
+      padding: 0 5px;
+      line-height: 17px;
+      border-radius: 2px;
+    }
+
+    .cap.no {
+      color: #a14833;
+      border-color: #c9a09a;
+    }
+
+    .btnrow {
+      margin-top: 10px;
+    }
+
+    .statusline {
+      margin-top: 9px;
+    }
+
+    .dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 8px;
+      vertical-align: -1px;
+      border: 1px solid rgba(0, 0, 0, .25);
+    }
+
+    .dot.ok {
+      background: #1f8a3c;
+    }
+
+    .dot.warn {
+      background: #d99a1e;
+    }
+
+    .dot.err {
+      background: #c23a2b;
+    }
+
+    #status-text {
+      color: #44443f;
+    }
+
+    /* FLASH 操作 */
+    .fieldrow {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .fieldline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .fieldrow .fld {
+      color: #44443f;
+    }
+
+    #clk-dd .dd-btn {
+      width: 86px;
+    }
+
+    #flash-dd {
+      flex: 0 1 320px;
+      min-width: 200px;
+    }
+
+    #flash-dd .dd {
+      width: 100%;
+    }
+
+    .bufrow {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .bufleft {
+      flex: 1;
+      min-width: 0;
+    }
+
+    #hex-view {
+      border: 1px solid #82827e;
+      height: 320px;
+      overflow: auto;
+      background: #fafaf8;
+    }
+
+    #buf-info {
+      color: #77776f;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    table.hex {
+      border-collapse: collapse;
+      font: 12.5px/1.5 Consolas, monospace;
+    }
+
+    .hex th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #e4e5e0;
+      color: #44443f;
+      border: 1px solid #b9b9b3;
+      padding: 1px 6px;
+      font-weight: 600;
+    }
+
+    .hex td {
+      border: 1px solid #e4e5e0;
+      padding: 0 6px;
+    }
+
+    .hex td:first-child {
+      background: #efefe9;
+      color: #77776f;
+    }
+
+    .opcol {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 96px;
+    }
+
+    .opcol button {
+      width: 100%;
+    }
+
+    /* 日志 */
+    .loghead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    #log {
+      margin: 0;
+      padding: 8px 10px;
+      height: 150px;
+      overflow-y: auto;
+      background: #232628;
+      color: #c9cdc4;
+      border-radius: 2px;
+      font: 12px/1.6 Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  </style>
 </head>
+
 <body>
-<div class="bar">CMSIS-DAP Flash Tool</div>
+  <div class="bar">CMSIS-DAP Flash Tool</div>
 
-<section>
-  <h2>设备管理</h2>
-  <div id="device-list"></div>
-  <div class="btnrow">
-    <button id="btn-pair">配对</button>
-    <button id="btn-refresh">刷新</button>
-    <button id="btn-open" disabled>打开</button>
-    <button id="btn-close" disabled>关闭</button>
-  </div>
-  <div class="statusline">
-    <span id="status-dot" class="dot err"></span><span id="status-text">未打开设备</span>
-  </div>
-</section>
-
-<section>
-  <h2>FLASH 操作</h2>
-  <div class="fieldrow">
-    <span class="fld">时钟速度</span><span id="clk-dd"></span>
-    <span class="fld">FLASH 型号</span><span id="flash-dd"></span>
-    <button id="btn-automatch" disabled>自动匹配</button>
-  </div>
-  <div class="bufrow">
-    <div class="bufleft">
-      <div id="hex-view"></div>
-      <div id="buf-info"></div>
+  <section>
+    <h2>设备管理</h2>
+    <div id="device-list"></div>
+    <div class="btnrow">
+      <button id="btn-pair">配对</button>
+      <button id="btn-refresh">刷新</button>
+      <button id="btn-open" disabled>打开</button>
+      <button id="btn-close" disabled>关闭</button>
     </div>
-    <div class="opcol">
-      <button id="btn-file-open">打开</button>
-      <button id="btn-save">保存</button>
-      <button id="btn-read" disabled>读取</button>
-      <button id="btn-erase" disabled>擦除</button>
-      <button id="btn-blank" disabled>查空</button>
-      <button id="btn-write" disabled>写入</button>
-      <button id="btn-verify" disabled>校验</button>
+    <div class="statusline">
+      <span id="status-dot" class="dot err"></span><span id="status-text">未打开设备</span>
     </div>
-    <input type="file" id="file-input" hidden />
-  </div>
-</section>
+  </section>
 
-<section>
-  <div class="loghead">
-    <h2 style="margin:0;border:0;padding:0">日志</h2>
-    <button id="btn-clear-log" style="padding:0 8px;font-size:12px">清空</button>
-  </div>
-  <pre id="log"></pre>
-</section>
+  <section>
+    <h2>FLASH 操作</h2>
+    <div class="fieldrow">
+      <div class="fieldline">
+        <span class="fld">时钟速度: </span><span id="clk-dd"></span>
+      </div>
+      <div class="fieldline">
+        <span class="fld">Flash 型号: </span><button id="btn-automatch" disabled>自动匹配</button><span id="flash-dd"></span>
+      </div>
+    </div>
+    <div class="bufrow">
+      <div class="bufleft">
+        <div id="hex-view"></div>
+        <div id="buf-info"></div>
+      </div>
+      <div class="opcol">
+        <button id="btn-file-open">打开</button>
+        <button id="btn-save">保存</button>
+        <button id="btn-read" disabled>读取</button>
+        <button id="btn-erase" disabled>擦除</button>
+        <button id="btn-blank" disabled>查空</button>
+        <button id="btn-write" disabled>写入</button>
+        <button id="btn-verify" disabled>校验</button>
+      </div>
+      <input type="file" id="file-input" hidden />
+    </div>
+  </section>
 
-<script type="module" src="out/main.js"></script>
+  <section>
+    <div class="loghead">
+      <h2 style="margin:0;border:0;padding:0">日志</h2>
+      <button id="btn-clear-log" style="padding:0 8px;font-size:12px">清空</button>
+    </div>
+    <pre id="log"></pre>
+  </section>
+
+  <script type="module" src="out/main.js"></script>
 </body>
+
 </html>

@@ -91,26 +91,51 @@ export class SpiFlash {
   // 轮询 WIP 直到空闲
   async waitWip(timeoutMs: number, pollMs = 250): Promise<void> {
     const t0 = performance.now();
-    for (;;) {
+    for (; ;) {
       if ((await this.readStatus() & 1) === 0) return;
       if (performance.now() - t0 > timeoutMs) throw new DapError(`等待 WIP 超时 (${timeoutMs} ms)`);
       await sleep(pollMs);
     }
   }
 
+  // ---- 3B/4B 地址模式 ----
+  // >16MB 芯片必须用 4 字节地址: 0xB7 进入 / 0xE9 退出, 并改用 4 字节命令变体 (读 0x13 / 编程 0x12)。
+  // 上电默认均为 3B 模式; 个别 >256Mbit 芯片默认 4B, 对其强制发 0xB7 亦无害。
+  private addr4: boolean | null = null; // null = 本会话尚未同步
+
+  // 按芯片容量同步地址模式; 返回 null 表示无需切换, 否则返回当前是否 4B
+  async syncAddressMode(sizeBytes: number): Promise<boolean | null> {
+    const want4 = sizeBytes > 0x1000000;
+    if (this.addr4 === want4) return null;
+    if (want4 || this.addr4 === true) {
+      await this.xfer(Uint8Array.of(want4 ? 0xb7 : 0xe9));
+    }
+    this.addr4 = want4;
+    return want4;
+  }
+
+  // 地址命令头: [命令][地址 3 或 4 字节]
+  private addrHeader(cmd3: number, cmd4: number, addr: number): Uint8Array {
+    return this.addr4
+      ? Uint8Array.of(cmd4, (addr >>> 24) & 0xff, (addr >>> 16) & 0xff, (addr >>> 8) & 0xff, addr & 0xff)
+      : Uint8Array.of(cmd3, (addr >>> 16) & 0xff, (addr >>> 8) & 0xff, addr & 0xff);
+  }
+
   // 读数据 (单次 ≤ dataChunk)
   async readData(addr: number, len: number): Promise<Uint8Array> {
-    const pkt = new Uint8Array(4 + len);
-    pkt.set(Uint8Array.of(0x03, (addr >>> 16) & 0xff, (addr >>> 8) & 0xff, addr & 0xff));
-    return this.xfer(pkt, 4);
+    const hdr = this.addrHeader(0x03, 0x13, addr);
+    const pkt = new Uint8Array(hdr.length + len);
+    pkt.set(hdr);
+    return this.xfer(pkt, hdr.length);
   }
 
   // 页编程 (单次 ≤ dataChunk, 调用方保证不跨页)
   async pageProgram(addr: number, data: Uint8Array): Promise<void> {
     await this.xfer(Uint8Array.of(0x06)); // Write Enable
-    const pkt = new Uint8Array(4 + data.length);
-    pkt.set(Uint8Array.of(0x02, (addr >>> 16) & 0xff, (addr >>> 8) & 0xff, addr & 0xff));
-    pkt.set(data, 4);
+    const hdr = this.addrHeader(0x02, 0x12, addr);
+    const pkt = new Uint8Array(hdr.length + data.length);
+    pkt.set(hdr);
+    pkt.set(data, hdr.length);
     await this.xfer(pkt);
   }
 
