@@ -50,7 +50,7 @@ let buffer: Uint8Array<ArrayBuffer> | null = null;
 let busy = false;
 let abort = false;
 const capsMap = new Map<USBDevice, { jtag?: boolean; swd?: boolean }>();
-const uidMap = new Map<USBDevice, string>(); // DAP_Info 序列号 (无则 USB 序列号)
+const uidMap = new Map<USBDevice, string>(); // DAP_Info 序列号 (无则使用 USB 序列号)
 
 // ---------- 工具函数 ----------
 
@@ -143,7 +143,7 @@ function renderDevices(): void {
   if (devices.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'dev-empty';
-    empty.textContent = '(无已配对设备, 点击"配对"添加)';
+    empty.textContent = '(无已配对设备, 点击"配对"添加设备)';
     deviceListEl.appendChild(empty);
     return;
   }
@@ -236,7 +236,7 @@ async function opOpen(): Promise<void> {
       /* 忽略 */
     }
     spi = new SpiFlash(dap);
-    log(`已就绪: 包长 ${dap.pktSize}B, 单次事务 ${spi.dataChunk}B, JTAG 已连接, ${clkLabel()}`);
+    log(`已就绪: 包长 ${dap.pktSize}Byte, 单次事务长 ${spi.dataChunk}Byte, JTAG 已连接, ${clkLabel()}`);
   } catch (e) {
     if (dap) {
       try {
@@ -249,9 +249,9 @@ async function opOpen(): Promise<void> {
     spi = null;
     const msg = err(e);
     const hint = /claim|denied|busy/i.test(msg)
-      ? ' — 设备可能被其他程序占用 (如正在调试的 Keil/IDE), 或接口缺少 WinUSB 驱动 (见 README)'
+      ? ' — 设备可能被其他程序占用, 或接口缺少 WinUSB 驱动'
       : msg.includes('超时')
-        ? ' — 设备接受了请求但无应答, 可尝试重新插拔'
+        ? ' — 设备无应答, 可尝试重新插拔'
         : '';
     log(`! 打开失败: ${msg}${hint}`);
   }
@@ -289,7 +289,7 @@ function requireSpi(): SpiFlash {
 
 function requireFlash(): { spi: SpiFlash; model: FlashInfo } {
   const s = requireSpi();
-  if (!flashInfo) throw new Error('请先选择 FLASH 型号 (或使用自动匹配)');
+  if (!flashInfo) throw new Error('请先选择 FLASH 型号, 或点击自动匹配');
   return { spi: s, model: flashInfo };
 }
 
@@ -326,7 +326,7 @@ async function opAutomatch(): Promise<void> {
     log(`自动匹配成功: JEDEC ${idStr} → ${m.vendor} ${m.model}, 时钟已恢复`);
   } else {
     await applyClock();
-    log(`! JEDEC ID ${idStr} 未在型号库中找到 (可在 src/flashdb.ts 中补充)`);
+    log(`! JEDEC ID ${idStr} 未在型号库中找到`);
   }
 }
 
@@ -511,7 +511,7 @@ function saveBuffer(): void {
 // ---------- 事件绑定 ----------
 
 if (!('usb' in navigator)) {
-  log('! 当前浏览器不支持 WebUSB, 请使用 Chrome / Edge (页面需来自 HTTPS 或 localhost)。');
+  log('! 当前浏览器不支持 WebUSB, 请使用 Chrome / Edge');
   throw new Error('WebUSB not supported');
 }
 
@@ -532,7 +532,7 @@ btn.pair.onclick = async () => {
     }
   } catch (e) {
     if ((e as DOMException)?.name === 'NotFoundError') {
-      log('! 未选择设备 (若未弹出选择框: 内嵌浏览器不支持 USB 授权, 请改用 Chrome 或 Edge)');
+      log('! 未选择设备');
       return;
     }
     log(`! 配对失败: ${err(e)}`);
@@ -545,7 +545,7 @@ btn.refresh.onclick = () => {
 btn.open.onclick = () => {
   if (busy) return;
   if (dap) return log('! 设备已处于打开状态');
-  if (!devices[selectedIdx]) return log('! 未选择设备: 请先点击"配对"授权并选中列表中的设备 (授权弹窗需 Chrome / Edge)');
+  if (!devices[selectedIdx]) return log('! 未选择设备: 请先点击"配对"授权并选中列表中的设备');
   runOp('打开设备', opOpen);
 };
 btn.close.onclick = () => {
@@ -571,7 +571,7 @@ const devGuard = (): boolean => {
 };
 const modelGuard = (): boolean => {
   if (!flashInfo) {
-    log('! 请先选择 FLASH 型号 (或使用自动匹配)');
+    log('! 请先选择 FLASH 型号, 或点击自动匹配');
     return true;
   }
   return false;
@@ -634,12 +634,14 @@ document.addEventListener('keydown', (e) => {
 clkDd.setOptions(
   [
     { value: '100', label: '100 kHz' },
+    { value: '200', label: '200 kHz' },
     { value: '500', label: '500 kHz' },
     { value: '1000', label: '1 MHz' },
     { value: '2000', label: '2 MHz' },
     { value: '5000', label: '5 MHz' },
     { value: '10000', label: '10 MHz' },
     { value: '20000', label: '20 MHz' },
+    { value: '30000', label: '30 MHz' },
   ],
   '10000',
 );
@@ -655,5 +657,5 @@ flashDd.setOptions([
 log('CMSIS-DAP Flash Tool 就绪.');
 updateBufInfo();
 void refreshDevices().then(() => {
-  if (devices.length === 0) log('提示: 尚无已授权设备, 请点击"配对"并在浏览器弹窗中选择设备 (推荐 Chrome / Edge).');
+  if (devices.length === 0) log('提示: 尚无已授权设备, 请点击"配对"并在浏览器弹窗中选择设备.');
 });

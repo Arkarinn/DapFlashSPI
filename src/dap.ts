@@ -1,5 +1,4 @@
-// CMSIS-DAP v2 (bulk) 传输层: 打开设备、收发命令包
-// 命令 ID 按 Include/DAP.h 现行编号 (注意: 0x08 是 WriteABORT, SWJ_Clock 是 0x11)
+// CMSIS-DAP v2 (bulk) 传输层命令
 export const DAP_CMD = {
   info: 0x00,
   hostStatus: 0x01,
@@ -14,7 +13,7 @@ export const DAP_CMD = {
   jtagSequence: 0x14,
 } as const;
 
-// DAP_Info 的信息 ID (见 Include/DAP.h "DAP ID"); UID/序列号 = serNum
+// DAP_Info ID
 export const DAP_INFO = {
   vendor: 0x01,
   product: 0x02,
@@ -202,7 +201,7 @@ export class CmsisDap {
   // DAP_Connect: 进入 JTAG 模式 (TCK=SCK, TMS=CS, TDI=MOSI, TDO=MISO)
   async connectJtag(): Promise<void> {
     const r = await this.cmd(Uint8Array.of(0x02, 0x02));
-    if (r.length < 1 || r[0] !== 0x02) throw new DapError('无法进入 JTAG 模式 (固件可能不支持 JTAG)');
+    if (r.length < 1 || r[0] !== 0x02) throw new DapError('无法进入 JTAG 模式, 固件可能不支持 JTAG');
   }
 
   async disconnect(): Promise<void> {
@@ -219,7 +218,7 @@ export class CmsisDap {
   async jtagSequence(req: Uint8Array<ArrayBuffer>, expect: number): Promise<Uint8Array> {
     const r = await this.cmd(req);
     CmsisDap.expectOk(r, 'JTAG 序列');
-    if (r.length < 1 + expect) throw new DapError(`JTAG 序列响应不足 (${r.length - 1}/${expect})`);
+    if (r.length < 1 + expect) throw new DapError(`JTAG 序列响应长度不足 (${r.length - 1}/${expect})`);
     return r.subarray(1, 1 + expect);
   }
 }

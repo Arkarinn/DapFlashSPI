@@ -52,13 +52,13 @@ python tools/gen_flashdb.py        # 生成 src/flashdb.ts
 
 ## 说明
 
-- 本项目由ZCode@GLM 5.3生成。
+- 本项目由ZCode(GLM 5.3)生成。
 - 仅支持 **CMSIS-DAP v2** (bulk 传输), v1 (HID) 不支持。
   设备被 Keil 等调试软件占用时无法打开, 先关闭程序。
 - SPI 经 JTAG 实现, 引脚映射: TCK→SCK, TMS→CS, TDI→MOSI, TDO→MISO;
   JTAG 为 LSB-first 而 SPI 命令为 MSB-first, 每字节做位反转;
   数据读写按 DAP 包长自动组包分包。
-- 大于 16MB 的芯片自动进入 4 字节地址模式 (0xB7 进入 / 0xE9 退出,读 0x13 / 编程 0x12)。
+- 大于 16MB 的芯片自动进入 4 字节地址模式。
   关闭设备前恢复 3 字节模式, 最大支持 256MB。
 
 ## 命令字与协议格式
@@ -76,29 +76,7 @@ python tools/gen_flashdb.py        # 生成 src/flashdb.ts
 | 唤醒 | `0xAB` | `[AB]` + 3 哑元, 释放掉电模式 |
 | 4 字节地址模式 | `0xB7` / `0xE9` | 进入 / 退出; 仅 >16MB 芯片使用 |
 
-\* 4 字节地址模式下使用带 * 的命令字, 且地址扩展为 4 字节 (`A31..A24` 起头)。
-
-### CMSIS-DAP 命令字 (v2 bulk)
-
-| 命令 | 命令字 | 说明 |
-| --- | --- | --- |
-| DAP_Info | `0x00` | `[00, 信息ID]` → `[回显, 长度, 数据]`; `0xF0` 能力位, `0x03` 序列号, `0xFF` 包长 |
-| DAP_HostStatus | `0x01` | `[01, 0, 1]` 点亮连接 LED |
-| DAP_Connect | `0x02` | `[02, 2]` 进入 JTAG 模式 → `[回显, 2]` |
-| DAP_Disconnect | `0x03` | 断开连接 |
-| DAP_SWJ_Clock | `0x11` | `[11, 频率Hz 小端4字节]` 设置 TCK 频率 |
-| DAP_JTAG_Sequence | `0x14` | 位流发生器, 格式见下 |
-
-### 协议格式
-
-- **USB 传输**: 每个 DAP 命令为一个 bulk OUT 包, 响应为一个 bulk IN 包;
-  响应首字节为命令 ID 回显, 多数命令随后跟一字节状态 (`0x00` OK / `0xFF` 错误)。
-- **JTAG_Sequence 请求**: `[0x14][序列个数]([序列info][TDI数据])*`;
-  `info` = bit7 TDO 捕获使能, bit6 TMS 电平, bit[5:0] TCK 个数 (0 表示 64)。
-  响应: `[0x14][0x00][捕获的 TDO 数据...]`。
-- **SPI 事务 → JTAG 序列**: 引脚 TCK=SCK / TMS=CS / TDI=MOSI / TDO=MISO;
-  CS 拉低期间把 SPI 数据按每 8 字节一段拆成序列 (TDI 为位反转后的字节, 捕获从读起始字节开始),
-  末尾补一段 TMS=1 的单个 TCK 将 CS 拉高; 收到的 TDO 再逐字节位反转还原为 MSB-first。
+\* 4 字节地址模式下使用带 * 的命令字, 且地址扩展为 4 字节。
 
 ## 链接
 
